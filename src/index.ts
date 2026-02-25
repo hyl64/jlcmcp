@@ -8,6 +8,7 @@ import { registerCopperKeepoutTools } from './tools/copper-keepout.js';
 import { registerSilkscreenTools } from './tools/silkscreen.js';
 import { registerAdvancedTools } from './tools/advanced.js';
 import { registerSchematicTools } from './tools/schematic.js';
+import { registerAgentTools } from './tools/agent.js';
 
 async function main() {
   const bridge = new BridgeClient();
@@ -25,6 +26,7 @@ async function main() {
   registerSilkscreenTools(server, bridge);
   registerAdvancedTools(server, bridge);
   registerSchematicTools(server, bridge);
+  registerAgentTools(server, bridge);
 
   // Connect bridge (lazy — will connect on first command)
   // Start MCP stdio transport

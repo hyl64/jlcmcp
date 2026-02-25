@@ -2,7 +2,7 @@
 
 嘉立创 EDA MCP Server — 让 AI 编程助手直接操控嘉立创 EDA 的 PCB 自动化工具集。
 
-通过 [Model Context Protocol](https://modelcontextprotocol.io/) 暴露 28 个 PCB/原理图工具，在 Claude Code / Cursor / Windsurf 等 AI IDE 中直接执行元件移动、走线、铺铜、DRC 等操作。
+通过 [Model Context Protocol](https://modelcontextprotocol.io/) 暴露 29 个 PCB/原理图工具，在 Claude Code / Cursor / Windsurf 等 AI IDE 中直接执行元件移动、走线、铺铜、DRC 等操作。内置 PCB Agent 可自主编排多步操作完成复杂任务。
 
 ## 架构
 
@@ -13,7 +13,7 @@ AI IDE ──stdio──> mcp-server ──WebSocket──> gateway ──> jlc-
 MCP server 通过 stdio 与 AI IDE 通信，内部维护 WebSocket 连接到 gateway 的 `/ws/bridge` 端点，转发命令给 jlc-bridge 插件控制 EDA 编辑器。
 
 本仓库包含两个组件：
-- `src/` — MCP Server（Node.js，28 个 PCB/原理图工具）
+- `src/` — MCP Server（Node.js，29 个 PCB/原理图工具 + Agent）
 - `jlc-bridge/` — 嘉立创 EDA 扩展插件（运行在 EDA 内部，执行实际操作）
 
 ## 前置条件
@@ -40,7 +40,8 @@ npm run build
       "command": "node",
       "args": ["<path-to>/jlceda-mcp-server/dist/index.js"],
       "env": {
-        "GATEWAY_WS_URL": "ws://127.0.0.1:18800/ws/bridge"
+        "GATEWAY_WS_URL": "ws://127.0.0.1:18800/ws/bridge",
+        "ANTHROPIC_API_KEY": "sk-ant-..."
       }
     }
   }
@@ -54,8 +55,10 @@ npm run build
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `GATEWAY_WS_URL` | `ws://127.0.0.1:18800/ws/bridge` | Gateway WebSocket 地址 |
+| `ANTHROPIC_API_KEY` | — | Anthropic API Key（设置后启用 pcb_agent 工具） |
+| `AGENT_MODEL` | `claude-sonnet-4-20250514` | Agent 使用的模型 |
 
-## 工具清单 (28 个)
+## 工具清单 (29 个)
 
 ### 状态查询 (7)
 
@@ -120,6 +123,12 @@ npm run build
 | `sch_get_netlist` | 导出网表 |
 | `sch_run_drc` | 运行原理图 DRC |
 
+### PCB Agent (1)
+
+| 工具 | 说明 |
+|------|------|
+| `pcb_agent` | 智能 Agent — 给出高层任务，自主编排多步操作完成（需 ANTHROPIC_API_KEY） |
+
 > 所有坐标参数单位为 **mil**（密耳），与嘉立创 EDA bridge 一致。
 
 ## 项目结构
@@ -128,6 +137,7 @@ npm run build
 ├── src/                          # MCP Server 源码
 │   ├── index.ts                  # MCP 入口（stdio transport）
 │   ├── bridge-client.ts          # WebSocket 客户端，连接 gateway bridge
+│   ├── agent.ts                  # PCB Agent 核心（工具注册表 + tool-use 循环）
 │   └── tools/
 │       ├── state.ts              # 状态查询 (7)
 │       ├── components.ts         # 元件操作 (3)
@@ -135,7 +145,8 @@ npm run build
 │       ├── copper-keepout.ts     # 铺铜/禁布区 (4)
 │       ├── silkscreen.ts         # 丝印 (3)
 │       ├── advanced.ts           # 差分对/等长组 (4)
-│       └── schematic.ts          # 原理图 (3)
+│       ├── schematic.ts          # 原理图 (3)
+│       └── agent.ts              # PCB Agent 工具注册 (1)
 ├── jlc-bridge/                   # 嘉立创 EDA 扩展插件
 │   ├── src/index.ts              # 插件主入口（2700+ 行）
 │   ├── extension.json            # 插件清单
@@ -157,6 +168,16 @@ WebSocket 客户端，连接 gateway `/ws/bridge`。
 - 命令超时 60 秒
 - 断线自动重连（3 秒间隔）
 - 懒连接：首次调用 `command()` 时才建立 WebSocket
+
+### agent.ts
+
+PCB 智能 Agent 核心，基于 Anthropic Claude API 的 tool-use 循环。
+
+- 工具注册表：将 28 个 bridge 动作映射为 Anthropic tool-use 格式
+- Agent 循环：system prompt → messages.create → 执行 tool_use → 追加 tool_result → 继续循环
+- 最大轮次限制（默认 20），防止无限循环
+- 收集每步执行日志，最终一起返回
+- 零额外基础设施，纯 `@anthropic-ai/sdk` 实现
 
 ### jlc-bridge 插件
 
@@ -194,6 +215,10 @@ npm run build    # 编译 + 打包为 .eext
 
 > 创建 USB 差分对
   → 调用 pcb_create_diff_pair {name:"USB", posNet:"USB_DP", negNet:"USB_DN"}
+
+> 分析当前布局并给出优化建议
+  → 调用 pcb_agent {task:"分析当前布局并给出优化建议"}
+  → Agent 自主调用 get_state → 分析 → 给出建议
 ```
 
 ## 验证
@@ -214,6 +239,7 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-1
 
 - TypeScript 5.7, ES2022 modules
 - [@modelcontextprotocol/sdk](https://www.npmjs.com/package/@modelcontextprotocol/sdk) ^1.12 — MCP 协议实现
+- [@anthropic-ai/sdk](https://www.npmjs.com/package/@anthropic-ai/sdk) ^0.39 — Claude API（Agent tool-use 循环）
 - [ws](https://www.npmjs.com/package/ws) ^8 — WebSocket 客户端
 - [zod](https://www.npmjs.com/package/zod) ^3.23 — 工具参数 schema 定义
 
