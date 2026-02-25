@@ -1,0 +1,48 @@
+{
+  "name": "jlc-bridge",
+  "uuid": "b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6",
+  "displayName": "JLC Bridge",
+  "description": "OpenClaw remote control bridge extension for PCB automation",
+  "version": "0.1.13",
+  "publisher": "OpenClaw",
+  "engines": {
+    "eda": "^2.3.0"
+  },
+  "license": "Apache-2.0",
+  "categories": "Other",
+  "keywords": [
+    "OpenClaw",
+    "PCB",
+    "Automation",
+    "Bridge"
+  ],
+  "activationEvents": {
+    "onStartupFinished": "activate"
+  },
+  "entry": "index.js",
+  "headerMenus": {
+    "pcb": [
+      {
+        "id": "JLCBridge",
+        "title": "JLC Bridge",
+        "menuItems": [
+          {
+            "id": "toggleBridge",
+            "title": "Enable/Disable Bridge",
+            "registerFn": "toggleBridge"
+          },
+          {
+            "id": "status",
+            "title": "Status",
+            "registerFn": "showStatus"
+          },
+          {
+            "id": "testCommand",
+            "title": "Test Command",
+            "registerFn": "testCommand"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -7,10 +7,14 @@
 ## 架构
 
 ```
-AI IDE ──stdio──> jlceda-mcp-server ──WebSocket──> gateway ──> jlc-bridge 插件 ──> 嘉立创 EDA
+AI IDE ──stdio──> mcp-server ──WebSocket──> gateway ──> jlc-bridge 插件 ──> 嘉立创 EDA
 ```
 
 MCP server 通过 stdio 与 AI IDE 通信，内部维护 WebSocket 连接到 gateway 的 `/ws/bridge` 端点，转发命令给 jlc-bridge 插件控制 EDA 编辑器。
+
+本仓库包含两个组件：
+- `src/` — MCP Server（Node.js，28 个 PCB/原理图工具）
+- `jlc-bridge/` — 嘉立创 EDA 扩展插件（运行在 EDA 内部，执行实际操作）
 
 ## 前置条件
 
@@ -121,19 +125,24 @@ npm run build
 ## 项目结构
 
 ```
-jlceda-mcp-server/
-├── src/
-│   ├── index.ts              # MCP 入口（stdio transport）
-│   ├── bridge-client.ts      # WebSocket 客户端，连接 gateway bridge
+├── src/                          # MCP Server 源码
+│   ├── index.ts                  # MCP 入口（stdio transport）
+│   ├── bridge-client.ts          # WebSocket 客户端，连接 gateway bridge
 │   └── tools/
-│       ├── state.ts          # 状态查询 (7)
-│       ├── components.ts     # 元件操作 (3)
-│       ├── routing.ts        # 走线/过孔 (4)
-│       ├── copper-keepout.ts # 铺铜/禁布区 (4)
-│       ├── silkscreen.ts     # 丝印 (3)
-│       ├── advanced.ts       # 差分对/等长组 (4)
-│       └── schematic.ts      # 原理图 (3)
-├── dist/                     # 编译输出
+│       ├── state.ts              # 状态查询 (7)
+│       ├── components.ts         # 元件操作 (3)
+│       ├── routing.ts            # 走线/过孔 (4)
+│       ├── copper-keepout.ts     # 铺铜/禁布区 (4)
+│       ├── silkscreen.ts         # 丝印 (3)
+│       ├── advanced.ts           # 差分对/等长组 (4)
+│       └── schematic.ts          # 原理图 (3)
+├── jlc-bridge/                   # 嘉立创 EDA 扩展插件
+│   ├── src/index.ts              # 插件主入口（2700+ 行）
+│   ├── extension.json            # 插件清单
+│   ├── build/pack.js             # 打包脚本（生成 .eext/.lcex）
+│   ├── package.json
+│   └── tsconfig.json
+├── dist/                         # MCP Server 编译输出
 ├── package.json
 └── tsconfig.json
 ```
@@ -148,6 +157,23 @@ WebSocket 客户端，连接 gateway `/ws/bridge`。
 - 命令超时 60 秒
 - 断线自动重连（3 秒间隔）
 - 懒连接：首次调用 `command()` 时才建立 WebSocket
+
+### jlc-bridge 插件
+
+运行在嘉立创 EDA 内部的扩展插件，负责执行实际的 PCB/原理图操作。
+
+- 通过 WebSocket 连接 gateway，接收并执行命令
+- 支持文件轮询回退（当 WebSocket 不可用时）
+- 50+ 个底层操作函数（元件移动、走线、铺铜、DRC 等）
+- 打包为 `.eext` / `.lcex` 格式，在嘉立创 EDA 扩展管理器中安装
+
+构建插件：
+
+```bash
+cd jlc-bridge
+npm install
+npm run build    # 编译 + 打包为 .eext
+```
 
 ## 使用示例
 

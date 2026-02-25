@@ -1,0 +1,20 @@
+{
+  "name": "jlc-bridge",
+  "version": "0.1.0",
+  "description": "OpenClaw 远程控制桥接插件",
+  "main": "dist/index.js",
+  "scripts": {
+    "compile": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=iife --platform=browser --global-name=edaEsbuildExportName --target=es2018",
+    "build": "npm run compile && node build/pack.js",
+    "watch": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=iife --platform=browser --global-name=edaEsbuildExportName --target=es2018 --watch"
+  },
+  "devDependencies": {
+    "@jlceda/pro-api-types": "^0.1.175",
+    "@types/node": "^20.10.0",
+    "archiver": "^7.0.1",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.3.0"
+  },
+  "author": "OpenClaw",
+  "license": "Apache-2.0"
+}
