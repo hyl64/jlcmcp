@@ -51,4 +51,14 @@ export function registerStateTools(server: any, bridge: BridgeClient) {
     const data = await bridge.command('get_board_info');
     return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
   });
+
+  server.tool('pcb_get_feature_support', '查询 bridge 支持的功能列表', {}, async () => {
+    const data = await bridge.command('get_feature_support');
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  });
+
+  server.tool('pcb_ping', '检查 bridge 连接状态', {}, async () => {
+    const data = await bridge.command('ping');
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  });
 }

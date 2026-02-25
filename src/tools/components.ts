@@ -47,4 +47,33 @@ export function registerComponentTools(server: any, bridge: BridgeClient) {
     }
     return { content: [{ type: 'text' as const, text: JSON.stringify(results, null, 2) }] };
   });
+
+  server.tool('pcb_select_component', '在编辑器中选中元件', {
+    designator: z.string().describe('元件位号'),
+  }, async ({ designator }: { designator: string }) => {
+    const data = await bridge.command('select_component', { designator });
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data ?? { success: true }, null, 2) }] };
+  });
+
+  server.tool('pcb_delete_selected', '删除当前选中的对象', {}, async () => {
+    const data = await bridge.command('delete_selected');
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data ?? { success: true }, null, 2) }] };
+  });
+
+  server.tool('pcb_create_component', '从库中放置元件到 PCB', {
+    libraryUuid: z.string().describe('库 UUID'),
+    componentUuid: z.string().describe('元件 UUID'),
+    layer: z.number().describe('层号 (1=顶层, 2=底层)'),
+    x: z.number().describe('X 坐标 (mil)'),
+    y: z.number().describe('Y 坐标 (mil)'),
+    rotation: z.number().optional().describe('旋转角度'),
+  }, async ({ libraryUuid, componentUuid, layer, x, y, rotation }: { libraryUuid: string; componentUuid: string; layer: number; x: number; y: number; rotation?: number }) => {
+    const params: Record<string, unknown> = {
+      component: { libraryUuid, uuid: componentUuid },
+      layer, x, y,
+    };
+    if (rotation !== undefined) params.rotation = rotation;
+    const data = await bridge.command('create_pcb_component', params);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data ?? { success: true }, null, 2) }] };
+  });
 }

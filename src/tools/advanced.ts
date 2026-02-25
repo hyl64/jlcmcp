@@ -16,6 +16,13 @@ export function registerAdvancedTools(server: any, bridge: BridgeClient) {
     return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
   });
 
+  server.tool('pcb_delete_diff_pair', '删除差分对', {
+    name: z.string().describe('差分对名称'),
+  }, async ({ name }: { name: string }) => {
+    const data = await bridge.command('delete_differential_pair', { name });
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data ?? { success: true }, null, 2) }] };
+  });
+
   server.tool('pcb_create_equal_length', '创建等长组', {
     name: z.string().describe('等长组名称'),
     nets: z.array(z.string()).describe('网络名称列表'),
@@ -27,5 +34,12 @@ export function registerAdvancedTools(server: any, bridge: BridgeClient) {
   server.tool('pcb_list_equal_lengths', '列出所有等长组', {}, async () => {
     const data = await bridge.command('list_equal_length_groups');
     return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  });
+
+  server.tool('pcb_delete_equal_length', '删除等长组', {
+    name: z.string().describe('等长组名称'),
+  }, async ({ name }: { name: string }) => {
+    const data = await bridge.command('delete_equal_length_group', { name });
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data ?? { success: true }, null, 2) }] };
   });
 }

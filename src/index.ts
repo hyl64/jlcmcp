@@ -9,6 +9,7 @@ import { registerSilkscreenTools } from './tools/silkscreen.js';
 import { registerAdvancedTools } from './tools/advanced.js';
 import { registerSchematicTools } from './tools/schematic.js';
 import { registerAgentTools } from './tools/agent.js';
+import { registerCalculatorTools } from './tools/calculators.js';
 
 async function main() {
   const bridge = new BridgeClient();
@@ -27,6 +28,7 @@ async function main() {
   registerAdvancedTools(server, bridge);
   registerSchematicTools(server, bridge);
   registerAgentTools(server, bridge);
+  registerCalculatorTools(server);
 
   // Connect bridge (lazy — will connect on first command)
   // Start MCP stdio transport

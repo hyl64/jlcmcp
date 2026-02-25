@@ -2,7 +2,7 @@
 
 嘉立创 EDA MCP Server — 让 AI 编程助手直接操控嘉立创 EDA 的 PCB 自动化工具集。
 
-通过 [Model Context Protocol](https://modelcontextprotocol.io/) 暴露 29 个 PCB/原理图工具，在 Claude Code / Cursor / Windsurf 等 AI IDE 中直接执行元件移动、走线、铺铜、DRC 等操作。内置 PCB Agent 可自主编排多步操作完成复杂任务。
+通过 [Model Context Protocol](https://modelcontextprotocol.io/) 暴露 39 个 PCB/原理图工具，在 Claude Code / Cursor / Windsurf 等 AI IDE 中直接执行元件移动、走线、铺铜、DRC 等操作。内置 PCB Agent 可自主编排多步操作完成复杂任务。
 
 ## 架构
 
@@ -13,7 +13,7 @@ AI IDE ──stdio──> mcp-server ──WebSocket──> gateway ──> jlc-
 MCP server 通过 stdio 与 AI IDE 通信，内部维护 WebSocket 连接到 gateway 的 `/ws/bridge` 端点，转发命令给 jlc-bridge 插件控制 EDA 编辑器。
 
 本仓库包含两个组件：
-- `src/` — MCP Server（Node.js，29 个 PCB/原理图工具 + Agent）
+- `src/` — MCP Server（Node.js，39 个 PCB/原理图工具 + Agent）
 - `jlc-bridge/` — 嘉立创 EDA 扩展插件（运行在 EDA 内部，执行实际操作）
 
 ## 前置条件
@@ -58,9 +58,9 @@ npm run build
 | `ANTHROPIC_API_KEY` | — | Anthropic API Key（设置后启用 pcb_agent 工具） |
 | `AGENT_MODEL` | `claude-sonnet-4-20250514` | Agent 使用的模型 |
 
-## 工具清单 (29 个)
+## 工具清单 (39 个)
 
-### 状态查询 (7)
+### 状态查询 (9)
 
 | 工具 | 说明 |
 |------|------|
@@ -71,14 +71,19 @@ npm run build
 | `pcb_get_pads` | 查询焊盘信息，可按位号过滤 |
 | `pcb_get_net_primitives` | 查询指定网络的所有图元 |
 | `pcb_get_board_info` | 获取工程信息 |
+| `pcb_get_feature_support` | 查询 bridge 支持的功能列表 |
+| `pcb_ping` | 检查 bridge 连接状态 |
 
-### 元件操作 (3)
+### 元件操作 (6)
 
 | 工具 | 说明 |
 |------|------|
 | `pcb_move_component` | 移动元件到指定坐标 |
 | `pcb_relocate_component` | 安全搬迁元件（自动断开走线） |
 | `pcb_batch_move` | 批量移动多个元件 |
+| `pcb_select_component` | 在编辑器中选中元件 |
+| `pcb_delete_selected` | 删除当前选中的对象 |
+| `pcb_create_component` | 从库中放置元件到 PCB |
 
 ### 走线 / 过孔 (4)
 
@@ -106,28 +111,38 @@ npm run build
 | `pcb_move_silkscreen` | 移动丝印 |
 | `pcb_auto_silkscreen` | 自动排列丝印（避免重叠） |
 
-### 高级约束 (4)
+### 高级约束 (6)
 
 | 工具 | 说明 |
 |------|------|
 | `pcb_create_diff_pair` | 创建差分对 |
 | `pcb_list_diff_pairs` | 列出所有差分对 |
+| `pcb_delete_diff_pair` | 删除差分对 |
 | `pcb_create_equal_length` | 创建等长组 |
 | `pcb_list_equal_lengths` | 列出所有等长组 |
+| `pcb_delete_equal_length` | 删除等长组 |
 
-### 原理图 (3)
+### 原理图 / 文档 (4)
 
 | 工具 | 说明 |
 |------|------|
 | `sch_get_state` | 读取原理图状态 |
 | `sch_get_netlist` | 导出网表 |
 | `sch_run_drc` | 运行原理图 DRC |
+| `pcb_open_document` | 切换到指定文档（原理图或 PCB） |
 
 ### PCB Agent (1)
 
 | 工具 | 说明 |
 |------|------|
 | `pcb_agent` | 智能 Agent — 给出高层任务，自主编排多步操作完成（需 ANTHROPIC_API_KEY） |
+
+### 计算工具 (2)
+
+| 工具 | 说明 |
+|------|------|
+| `calc_impedance` | 计算走线阻抗，或根据目标阻抗反算线宽（微带线/带状线/差分） |
+| `calc_trace_width` | 根据载流要求计算最小走线宽度 (IPC-2221) |
 
 > 所有坐标参数单位为 **mil**（密耳），与嘉立创 EDA bridge 一致。
 
@@ -137,6 +152,7 @@ npm run build
 ├── src/                          # MCP Server 源码
 │   ├── index.ts                  # MCP 入口（stdio transport）
 │   ├── bridge-client.ts          # WebSocket 客户端，连接 gateway bridge
+│   ├── calculators.ts            # 阻抗/线宽纯计算函数
 │   ├── agent.ts                  # PCB Agent 核心（工具注册表 + tool-use 循环）
 │   └── tools/
 │       ├── state.ts              # 状态查询 (7)
@@ -146,6 +162,7 @@ npm run build
 │       ├── silkscreen.ts         # 丝印 (3)
 │       ├── advanced.ts           # 差分对/等长组 (4)
 │       ├── schematic.ts          # 原理图 (3)
+│       ├── calculators.ts        # 阻抗/线宽计算工具 (2)
 │       └── agent.ts              # PCB Agent 工具注册 (1)
 ├── jlc-bridge/                   # 嘉立创 EDA 扩展插件
 │   ├── src/index.ts              # 插件主入口（2700+ 行）

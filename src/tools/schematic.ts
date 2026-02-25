@@ -24,4 +24,11 @@ export function registerSchematicTools(server: any, bridge: BridgeClient) {
     const data = await bridge.command('run_sch_drc', params);
     return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
   });
+
+  server.tool('pcb_open_document', '切换到指定文档（原理图或 PCB）', {
+    uuid: z.string().describe('文档 UUID'),
+  }, async ({ uuid }: { uuid: string }) => {
+    const data = await bridge.command('open_document', { uuid });
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data ?? { success: true }, null, 2) }] };
+  });
 }
