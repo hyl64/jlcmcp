@@ -3,7 +3,7 @@
   "uuid": "b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6",
   "displayName": "JLC Bridge",
   "description": "OpenClaw remote control bridge extension for PCB automation",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "publisher": "OpenClaw",
   "engines": {
     "eda": "^2.3.0"

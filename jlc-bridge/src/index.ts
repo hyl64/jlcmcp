@@ -2,10 +2,9 @@ import * as extensionConfig from '../extension.json';
 
 const APP_NAME = String((extensionConfig as any).displayName || 'JLC Bridge');
 const APP_VERSION = String((extensionConfig as any).version || '0.0.0');
-const BRIDGE_DIR = 'C:\\Users\\0\\.openclaw\\workspace\\jlc-bridge';
-const COMMAND_FILE = `${BRIDGE_DIR}\\command.json`;
-const RESULT_FILE = `${BRIDGE_DIR}\\result.json`;
-const LOG_FILE = `${BRIDGE_DIR}\\bridge.log`;
+const DEFAULT_BRIDGE_DIR = 'C:\\Users\\0\\.openclaw\\workspace\\jlc-bridge';
+const BRIDGE_DIR_STORAGE_KEY = 'jlcBridgeDir';
+const WORKSPACE_ROOT_STORAGE_KEY = 'jlcBridgeWorkspaceRoot';
 const POLL_INTERVAL_MS = 500;
 const ENABLED_STORAGE_KEY = 'jlcBridgeEnabled';
 const TIMER_ID = 'jlc_bridge_poll_loop';
@@ -41,6 +40,66 @@ type BridgeResult = {
 
 function anyEda(): any {
   return eda as any;
+}
+
+function readStringConfig(key: string, fallback = ''): string {
+  try {
+    const value = anyEda()?.sys_Storage?.getExtensionUserConfig?.(key);
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  } catch {
+    // use fallback
+  }
+  return fallback;
+}
+
+function normalizeDirPath(dirPath: string): string {
+  const value = String(dirPath || '').trim();
+  return value.replace(/[\\/]+$/, '');
+}
+
+function normalizeWorkspaceRoot(root: string): string {
+  const value = String(root || '').trim();
+  if (!value) return '';
+  if (/[\\/]$/.test(value)) return value;
+  const separator = value.includes('\\') && !value.includes('/') ? '\\' : '/';
+  return `${value}${separator}`;
+}
+
+function normalizePathForCompare(filePath: string): string {
+  const normalized = String(filePath || '').trim().replace(/\\/g, '/');
+  return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function isPathInsideRoot(filePath: string, root: string): boolean {
+  const normalizedFile = normalizePathForCompare(filePath);
+  const normalizedRoot = normalizePathForCompare(normalizeWorkspaceRoot(root));
+  return Boolean(normalizedRoot) && normalizedFile.startsWith(normalizedRoot);
+}
+
+function joinPath(dirPath: string, fileName: string): string {
+  const normalized = normalizeDirPath(dirPath);
+  const separator = normalized.includes('\\') && !normalized.includes('/') ? '\\' : '/';
+  return `${normalized}${separator}${fileName}`;
+}
+
+function getBridgeDir(): string {
+  return normalizeDirPath(readStringConfig(BRIDGE_DIR_STORAGE_KEY, DEFAULT_BRIDGE_DIR));
+}
+
+function getCommandFile(): string {
+  return joinPath(getBridgeDir(), 'command.json');
+}
+
+function getResultFile(): string {
+  return joinPath(getBridgeDir(), 'result.json');
+}
+
+function getLogFile(): string {
+  return joinPath(getBridgeDir(), 'bridge.log');
+}
+
+function getWorkspaceRoot(params?: { workspaceRoot?: string }): string {
+  return normalizeWorkspaceRoot(String(params?.workspaceRoot || readStringConfig(WORKSPACE_ROOT_STORAGE_KEY, '')));
 }
 
 function hasLegacyFileApi(): boolean {
@@ -105,7 +164,7 @@ async function ensureBridgeDir(): Promise<void> {
   try {
     const fileApi = anyEda()?.sys_File;
     if (fileApi?.mkdir) {
-      fileApi.mkdir(BRIDGE_DIR);
+      fileApi.mkdir(getBridgeDir());
     }
   } catch {
     // ignore
@@ -140,8 +199,9 @@ function appendLog(message: string): void {
   void (async () => {
     await ensureBridgeDir();
     const line = `${new Date().toISOString()} ${message}\n`;
-    const prev = (await readTextFile(LOG_FILE)) || '';
-    await writeTextFile(LOG_FILE, prev + line);
+    const logFile = getLogFile();
+    const prev = (await readTextFile(logFile)) || '';
+    await writeTextFile(logFile, prev + line);
   })();
 }
 
@@ -1047,27 +1107,31 @@ async function getPCBState(): Promise<any> {
 
   const components: any[] = [];
   if (api?.pcb_PrimitiveComponent?.getAll) {
-    const rows = await api.pcb_PrimitiveComponent.getAll();
-    if (Array.isArray(rows)) {
-      for (const row of rows) {
-        const primitiveId = row?.getState_PrimitiveId?.() || '';
-        const designator = row?.getState_Designator?.() || '';
-        if (!primitiveId || !designator) continue;
+    try {
+      const rows = await api.pcb_PrimitiveComponent.getAll();
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          const primitiveId = row?.getState_PrimitiveId?.() || '';
+          const designator = row?.getState_Designator?.() || '';
+          if (!primitiveId || !designator) continue;
 
-        components.push({
-          primitiveId,
-          designator,
-          name: row?.getState_Name?.() || '',
-          x: Number(row?.getState_X?.() ?? 0),
-          y: Number(row?.getState_Y?.() ?? 0),
-          rotation: Number(row?.getState_Rotation?.() ?? 0),
-          width: Number(row?.getState_Width?.() ?? 0),
-          height: Number(row?.getState_Height?.() ?? 0),
-          layer: String(row?.getState_Layer?.() ?? ''),
-          locked: Boolean(row?.getState_PrimitiveLock?.()),
-          padNets: normalizeNetArray(row?.getState_Pads?.()),
-        });
+          components.push({
+            primitiveId,
+            designator,
+            name: row?.getState_Name?.() || '',
+            x: Number(row?.getState_X?.() ?? 0),
+            y: Number(row?.getState_Y?.() ?? 0),
+            rotation: Number(row?.getState_Rotation?.() ?? 0),
+            width: Number(row?.getState_Width?.() ?? 0),
+            height: Number(row?.getState_Height?.() ?? 0),
+            layer: String(row?.getState_Layer?.() ?? ''),
+            locked: Boolean(row?.getState_PrimitiveLock?.()),
+            padNets: normalizeNetArray(row?.getState_Pads?.()),
+          });
+        }
       }
+    } catch (error) {
+      log(`pcb component query failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -1084,20 +1148,24 @@ async function getPCBState(): Promise<any> {
 
   const nets: any[] = [];
   if (api?.pcb_Net?.getAllNetsName) {
-    const names = await api.pcb_Net.getAllNetsName();
-    if (Array.isArray(names)) {
-      for (const name of names) {
-        if (typeof name === 'string' && name.trim()) {
-          const netName = name.trim();
-          let length: number | undefined;
-          try {
-            length = await api.pcb_Net.getNetLength(netName);
-          } catch {
-            // ignore
+    try {
+      const names = await api.pcb_Net.getAllNetsName();
+      if (Array.isArray(names)) {
+        for (const name of names) {
+          if (typeof name === 'string' && name.trim()) {
+            const netName = name.trim();
+            let length: number | undefined;
+            try {
+              length = await api.pcb_Net.getNetLength(netName);
+            } catch {
+              // ignore
+            }
+            nets.push({ name: netName, length });
           }
-          nets.push({ name: netName, length });
         }
       }
+    } catch (error) {
+      log(`pcb net query failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -1832,8 +1900,249 @@ async function getFeatureSupport(): Promise<any> {
       getNetlist: Boolean(api?.sch_Netlist?.getNetlist),
       schDrc: Boolean(api?.sch_Drc?.check),
       createPcbComponent: Boolean(api?.pcb_PrimitiveComponent?.create),
+      executeLcedaScriptFile: true,
     },
   };
+}
+
+async function executeLcedaScriptFile(params: { scriptPath?: string; requiredMarker?: string; dryRun?: boolean; workspaceRoot?: string }): Promise<any> {
+  const scriptPath = String(params?.scriptPath || '').trim();
+  if (!scriptPath) throw new Error('scriptPath is required');
+  const workspaceRoot = getWorkspaceRoot(params);
+  if (!workspaceRoot) {
+    throw new Error(`workspaceRoot is required; pass params.workspaceRoot or set ${WORKSPACE_ROOT_STORAGE_KEY}`);
+  }
+  if (!isPathInsideRoot(scriptPath, workspaceRoot)) {
+    throw new Error(`scriptPath must be inside ${workspaceRoot}`);
+  }
+  if (!/\.js$/i.test(scriptPath)) {
+    throw new Error('scriptPath must point to a .js file');
+  }
+
+  const script = await readTextFile(scriptPath);
+  if (!script || !script.trim()) {
+    throw new Error(`script file is empty or unreadable: ${scriptPath}`);
+  }
+
+  const requiredMarker = String(params?.requiredMarker || 'Cloud SIM V1 direct LCEDA import script');
+  const hasV1ImportMarker = script.includes('V1 import: ') || script.includes('V1 93 import: ');
+  if (!script.includes(requiredMarker) || !hasV1ImportMarker) {
+    throw new Error('script does not contain the required Cloud SIM V1 import markers');
+  }
+
+  if (params?.dryRun) {
+    return {
+      executed: false,
+      dryRun: true,
+      scriptPath,
+      workspaceRoot,
+      requiredMarker,
+      bytes: script.length,
+      hasCloudSimMarker: script.includes(requiredMarker),
+      hasV1ImportMarker,
+    };
+  }
+
+  let beforeComponents: number | undefined;
+  try {
+    const beforeRaw = await anyEda()?.sch_PrimitiveComponent?.getAll?.();
+    beforeComponents = Array.isArray(beforeRaw) ? beforeRaw.length : undefined;
+  } catch {
+    beforeComponents = undefined;
+  }
+
+  const startedAt = new Date().toISOString();
+  // The generated LCEDA scripts are trusted local files under workspaceRoot.
+  // The LCEDA extension sandbox does not always expose eval, so run them through
+  // AsyncFunction while explicitly providing the EDA globals they need.
+  const eda = anyEda();
+  if (!eda) {
+    throw new Error('eda API is not available in the LCEDA extension sandbox');
+  }
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const runner = new AsyncFunction('eda', 'SCH', script);
+  const result = runner.call(globalThis, eda, (globalThis as any).SCH);
+  const scriptResult = result && typeof result.then === 'function' ? await result : result;
+
+  let afterComponents: number | undefined;
+  try {
+    const afterRaw = await anyEda()?.sch_PrimitiveComponent?.getAll?.();
+    afterComponents = Array.isArray(afterRaw) ? afterRaw.length : undefined;
+  } catch {
+    afterComponents = undefined;
+  }
+
+  return {
+    executed: true,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    scriptPath,
+    workspaceRoot,
+    requiredMarker,
+    beforeComponents,
+    afterComponents,
+    scriptResult: scriptResult ?? (globalThis as any).__cloudSimV1ImportResult,
+  };
+}
+
+async function importCloudSimV1Schematic(): Promise<any> {
+  const api = anyEda();
+  if (!api?.sch_PrimitiveComponent?.create || !api?.sch_PrimitiveComponent?.getAll || !api?.sch_PrimitiveWire?.create) {
+    throw new Error('current EDA does not expose the required schematic primitive APIs');
+  }
+
+  const workspaceRoot = getWorkspaceRoot();
+  if (!workspaceRoot) {
+    throw new Error(`workspace root is required; set ${WORKSPACE_ROOT_STORAGE_KEY}`);
+  }
+  const netlistPath = `${workspaceRoot}lceda_import_netlist_v1.json`;
+  const netlistRaw = await readTextFile(netlistPath);
+  if (!netlistRaw || !netlistRaw.trim()) {
+    throw new Error(`netlist file is empty or unreadable: ${netlistPath}`);
+  }
+  const netlistData = JSON.parse(netlistRaw) as Record<string, any>;
+  const targetCount = Object.keys(netlistData).length;
+
+  const log = (msg: string) => api?.sys_Log?.add?.(`V1 import: ${msg}`);
+  const warn = (msg: string) => api?.sys_Log?.add?.(`V1 import warning: ${msg}`);
+  const getPrimitiveId = (row: any): string => String(row?.primitiveId || row?.id || row?.uuid || row?.gId || row?.gid || row?.getState_PrimitiveId?.() || '');
+
+  const beforeComponents = await api.sch_PrimitiveComponent.getAll(undefined, true);
+  const beforeWires = api.sch_PrimitiveWire?.getAll ? await api.sch_PrimitiveWire.getAll() : [];
+  const beforePins = api.sch_PrimitivePin?.getAll ? await api.sch_PrimitivePin.getAll() : [];
+  const componentIds = (Array.isArray(beforeComponents) ? beforeComponents : []).map(getPrimitiveId).filter(Boolean);
+  const wireIds = (Array.isArray(beforeWires) ? beforeWires : []).map(getPrimitiveId).filter(Boolean);
+  const pinIds = (Array.isArray(beforePins) ? beforePins : []).map(getPrimitiveId).filter(Boolean);
+
+  if (wireIds.length && api.sch_PrimitiveWire?.delete) await api.sch_PrimitiveWire.delete(wireIds);
+  if (pinIds.length && api.sch_PrimitivePin?.delete) await api.sch_PrimitivePin.delete(pinIds);
+  if (componentIds.length && api.sch_PrimitiveComponent?.delete) await api.sch_PrimitiveComponent.delete(componentIds);
+  log(`cleared current page: components=${componentIds.length}, wires=${wireIds.length}, pins=${pinIds.length}`);
+
+  const libUuid = await api.lib_LibrariesList?.getSystemLibraryUuid?.();
+  if (!libUuid) throw new Error('Unable to get system library UUID');
+
+  const findDevice = async (component: any): Promise<any> => {
+    const lcscId = component?.props?.['Supplier Part'];
+    if (lcscId && api.lib_Device?.getByLcscIds) {
+      const devices = await api.lib_Device.getByLcscIds(lcscId);
+      if (Array.isArray(devices) && devices.length > 0) return devices[0];
+    }
+    const deviceName = component?.props?.device_name;
+    if (deviceName && api.lib_Device?.search) {
+      const devices = await api.lib_Device.search(deviceName, '1');
+      if (Array.isArray(devices) && devices.length > 0) return devices[0];
+    }
+    return null;
+  };
+
+  const setProps = async (primitiveId: string, component: any): Promise<void> => {
+    const props: Record<string, string> = {};
+    if (component?.props?.Designator) props.designator = component.props.Designator;
+    if (component?.props?.value) props.name = component.props.value;
+    if (Object.keys(props).length && api.sch_PrimitiveComponent?.modify) {
+      await api.sch_PrimitiveComponent.modify(primitiveId, props);
+    }
+  };
+
+  const createNetStubs = async (layout: { primitiveId: string; x: number; y: number }, component: any): Promise<any> => {
+    const actualPins = await api.sch_PrimitiveComponent.getAllPinsByPrimitiveId(layout.primitiveId);
+    const pins = Array.isArray(actualPins) ? actualPins : [];
+    const pinNumbers = new Set(pins.map((pin: any) => String(pin.pinNumber ?? pin.getState_PinNumber?.() ?? pin.getState_Number?.() ?? '')));
+    let minX = Infinity;
+    let maxX = -Infinity;
+    for (const pin of pins) {
+      const x = Number(pin.x ?? pin.getState_X?.() ?? 0);
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+    }
+    const centerX = Number.isFinite(minX) && Number.isFinite(maxX) ? (minX + maxX) / 2 : layout.x;
+    let created = 0;
+    const missing: string[] = [];
+    for (const [pinNumber, netName] of Object.entries(component?.pins ?? {})) {
+      if (!pinNumbers.has(String(pinNumber))) {
+        missing.push(String(pinNumber));
+        continue;
+      }
+      const pin = pins.find((candidate: any) => String(candidate.pinNumber ?? candidate.getState_PinNumber?.() ?? candidate.getState_Number?.() ?? '') === String(pinNumber));
+      const startX = Number(pin?.x ?? pin?.getState_X?.() ?? 0);
+      const startY = Number(pin?.y ?? pin?.getState_Y?.() ?? 0);
+      const endX = startX >= centerX ? startX + 30 : startX - 30;
+      await api.sch_PrimitiveWire.create([startX, startY, endX, startY], String(netName).toUpperCase());
+      created += 1;
+    }
+    return {
+      created,
+      missing,
+      actualPins: pins.map((pin: any) => String(pin.pinNumber ?? pin.getState_PinNumber?.() ?? pin.getState_Number?.() ?? '')),
+    };
+  };
+
+  const placed: any[] = [];
+  const failed: string[] = [];
+  const pinMissing: any[] = [];
+  let wires = 0;
+  let currentX = 20;
+  let currentY = 20;
+  const gridSize = 100;
+  const maxPerRow = 15;
+  let index = 0;
+
+  for (const [componentId, component] of Object.entries(netlistData)) {
+    const designator = String(component?.props?.Designator ?? componentId);
+    const device = await findDevice(component);
+    if (!device?.uuid) {
+      failed.push(designator);
+      warn(`component not found: ${designator} / ${component?.props?.['Supplier Part'] ?? ''}`);
+    } else {
+      const primitive = await api.sch_PrimitiveComponent.create({ libraryUuid: libUuid, uuid: device.uuid }, currentX, currentY);
+      const primitiveId = getPrimitiveId(primitive);
+      if (!primitiveId) {
+        failed.push(designator);
+        warn(`component create returned no primitiveId: ${designator}`);
+      } else {
+        await setProps(primitiveId, component);
+        const result = await createNetStubs({ primitiveId, x: currentX, y: currentY }, component);
+        wires += result.created;
+        placed.push({ designator, componentId, primitiveId, missing: result.missing, actualPins: result.actualPins });
+        if (result.missing.length) {
+          pinMissing.push({ designator, missing: result.missing, actualPins: result.actualPins });
+        }
+      }
+    }
+
+    index += 1;
+    if (index % maxPerRow === 0) {
+      currentX = 20;
+      currentY += gridSize * 2;
+    } else {
+      currentX += gridSize * 3;
+    }
+  }
+
+  const afterComponents = await api.sch_PrimitiveComponent.getAll(undefined, true);
+  const afterWires = api.sch_PrimitiveWire?.getAll ? await api.sch_PrimitiveWire.getAll() : [];
+  const summary = {
+    target: targetCount,
+    placed: placed.length,
+    failed: failed.length,
+    wires,
+    pinMissingGroups: pinMissing.length,
+    pageComponents: Array.isArray(afterComponents) ? afterComponents.length : undefined,
+    pageWires: Array.isArray(afterWires) ? afterWires.length : undefined,
+    failedDesignators: failed,
+    pinMissing,
+    placedDetails: placed,
+  };
+  log(`done target=${targetCount}, placed=${placed.length}, failed=${failed.length}, wires=${wires}, pinMissingGroups=${pinMissing.length}, pageComponents=${summary.pageComponents}, pageWires=${summary.pageWires}`);
+  if (failed.length) warn(`failed=${failed.join(',')}`);
+  if (pinMissing.length) warn(`pinMissing=${pinMissing.map((row) => `${row.designator}:${row.missing.join('/')}`).join(' | ')}`);
+  if (!failed.length && !pinMissing.length) {
+    api?.sys_Message?.showToastMessage?.(`V1 import complete: ${placed.length}/${targetCount}, wires=${wires}`, 'success');
+  } else {
+    api?.sys_Message?.showToastMessage?.('V1 import finished with warnings; check log.', 'warning');
+  }
+  return summary;
 }
 
 // ─── Track / net query & delete ───
@@ -2168,7 +2477,7 @@ async function takeScreenshot(): Promise<any> {
     }
   }
 
-  throw new Error(`screenshot unavailable, save manually to ${BRIDGE_DIR}\\screenshot.png`);
+  throw new Error(`screenshot unavailable, save manually to ${joinPath(getBridgeDir(), 'screenshot.png')}`);
 }
 
 async function executeCommand(cmd: BridgeCommand): Promise<BridgeResult> {
@@ -2291,6 +2600,12 @@ async function executeCommand(cmd: BridgeCommand): Promise<BridgeResult> {
       case 'run_sch_drc':
         data = await runSchDrc(cmd.params);
         break;
+      case 'execute_lceda_script_file':
+        data = await executeLcedaScriptFile(cmd.params);
+        break;
+      case 'import_cloud_sim_v1_schematic':
+        data = await importCloudSimV1Schematic();
+        break;
       case 'create_pcb_component':
         data = await createPcbComponent(cmd.params);
         break;
@@ -2310,7 +2625,7 @@ async function executeCommand(cmd: BridgeCommand): Promise<BridgeResult> {
 }
 
 async function readCommand(): Promise<BridgeCommand | null> {
-  const content = await readTextFile(COMMAND_FILE);
+  const content = await readTextFile(getCommandFile());
   if (!content || !content.trim()) return null;
 
   try {
@@ -2324,11 +2639,11 @@ async function readCommand(): Promise<BridgeCommand | null> {
 }
 
 async function clearCommand(): Promise<void> {
-  await writeTextFile(COMMAND_FILE, '');
+  await writeTextFile(getCommandFile(), '');
 }
 
 async function writeResult(result: BridgeResult): Promise<void> {
-  await writeTextFile(RESULT_FILE, JSON.stringify(result, null, 2));
+  await writeTextFile(getResultFile(), JSON.stringify(result, null, 2));
 }
 
 async function pollOnce(): Promise<void> {
@@ -2404,9 +2719,10 @@ function stopIntervals(): void {
 
 async function ensureBridgeFiles(): Promise<void> {
   await ensureBridgeDir();
-  const existing = await readTextFile(COMMAND_FILE);
+  const commandFile = getCommandFile();
+  const existing = await readTextFile(commandFile);
   if (existing === undefined) {
-    await writeTextFile(COMMAND_FILE, '');
+    await writeTextFile(commandFile, '');
   }
 }
 
@@ -2631,8 +2947,8 @@ async function startPolling(silent = false): Promise<void> {
   if (!silent) {
     showInfo([
       'Bridge enabled (file polling)',
-      `Command file: ${COMMAND_FILE}`,
-      `Result file: ${RESULT_FILE}`,
+      `Command file: ${getCommandFile()}`,
+      `Result file: ${getResultFile()}`,
       `Poll interval: ${POLL_INTERVAL_MS}ms`,
       `Timer: ${getTimerMode()}`,
       `File API: ${getFileApiMode()}`,
@@ -2689,8 +3005,8 @@ export function showStatus(): void {
       `Runtime: ${runtime}`,
       `Transport: ${transport}`,
       `Persisted enabled: ${persisted ? 'yes' : 'no'}`,
-      `Command file: ${COMMAND_FILE}`,
-      `Result file: ${RESULT_FILE}`,
+      `Command file: ${getCommandFile()}`,
+      `Result file: ${getResultFile()}`,
       `Poll interval: ${POLL_INTERVAL_MS}ms`,
       `Timer: ${getTimerMode()}`,
       `File API: ${getFileApiMode()}`,
