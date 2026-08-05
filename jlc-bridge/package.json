@@ -1,6 +1,6 @@
 {
   "name": "jlc-bridge",
-  "version": "0.1.0",
+  "version": "0.1.14",
   "description": "OpenClaw 远程控制桥接插件",
   "main": "dist/index.js",
   "scripts": {
