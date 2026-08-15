@@ -4,9 +4,9 @@ dist/
 .env
 *.eext
 *.lcex
-jlc-bridge/dist/
-jlc-bridge/build/dist/
-jlc-bridge/build/package/
-jlc-bridge/build/*.eext
-jlc-bridge/build/*.lcex
-jlc-bridge/node_modules/
+legacy-jlc-bridge/dist/
+legacy-jlc-bridge/build/dist/
+legacy-jlc-bridge/build/package/
+legacy-jlc-bridge/build/*.eext
+legacy-jlc-bridge/build/*.lcex
+legacy-jlc-bridge/node_modules/

@@ -1,0 +1,200 @@
+#!/usr/bin/env node
+/**
+ * port-plugin.mjs
+ *
+ * 把 legacy-jlc-bridge 插件中已验证过的 35 个动作处理器（基于 EasyEDA Pro 官方
+ * `eda.*` 扩展 API 编写）机械移植为「代码模板」，供官方 Bridge Server
+ * (POST /execute) 在 EDA 内执行。这样 MCP Server 不再依赖自研 WebSocket 协议
+ * 与自研插件，完全走官方 Run API Gateway + easyeda-api-skill 链路。
+ *
+ * 原理：
+ *   1. 用括号匹配提取每个具名函数（含 TS 类型签名）
+ *   2. 用 TypeScript transpileModule 剥离类型注解 → 纯 JS
+ *   3. 按 dispatch 动作 → 根处理器 → 函数调用图 → 传递闭包（所需辅助函数）
+ *   4. 生成 src/codegen/generated.ts：GENERATED_ACTIONS[action] = { pre, body }
+ *
+ * 用法：npm run port
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
+
+const ROOT = process.cwd();
+const SRC = path.join(ROOT, 'legacy-jlc-bridge/src/index.ts');
+const OUT = path.join(ROOT, 'src/codegen/generated.ts');
+
+const source = fs.readFileSync(SRC, 'utf8');
+
+// ─── 1. 提取具名函数（TS 编译器 API，signature + body，含 TS）───────
+function extractFunctions(src) {
+  const fns = new Map(); // name -> { full }
+  const sf = ts.createSourceFile('plugin.ts', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  function visit(node) {
+    if (ts.isFunctionDeclaration(node) && node.name && ts.isIdentifier(node.name)) {
+      fns.set(node.name.text, { full: node.getText(sf) });
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sf);
+  return fns;
+}
+
+const fns = extractFunctions(source);
+
+// ─── 2. TS → JS（transpileModule 剥离类型）───────────────────────────
+function toJs(tsText) {
+  const out = ts.transpileModule(tsText, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+    fileName: 'inline.ts',
+  });
+  return out.outputText.trim();
+}
+
+// ─── 3. 函数调用图 ───────────────────────────────────────────────────
+function depsOf(name) {
+  const fn = fns.get(name);
+  if (!fn) return new Set();
+  const deps = new Set();
+  for (const other of fns.keys()) {
+    if (other === name) continue;
+    const re = new RegExp(`\\b${other}\\s*\\(`);
+    if (re.test(fn.full)) deps.add(other);
+  }
+  return deps;
+}
+
+function closure(root) {
+  const seen = new Set();
+  const stack = [root];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    for (const d of depsOf(cur)) stack.push(d);
+  }
+  return seen;
+}
+
+// ─── 4. dispatch 动作 → 根处理器 ─────────────────────────────────────
+const DISPATCH = {
+  get_state: 'getPCBState',
+  get_feature_support: 'getFeatureSupport',
+  screenshot: 'takeScreenshot',
+  get_silkscreens: 'getSilkscreens',
+  move_silkscreen: 'moveSilkscreen',
+  auto_silkscreen: 'autoSilkscreen',
+  move_component: 'moveComponent',
+  route_track: 'routeTrack',
+  create_via: 'createVia',
+  delete_via: 'deleteVia',
+  get_tracks: 'getTracks',
+  delete_tracks: 'deleteTracks',
+  get_net_primitives: 'getNetPrimitives',
+  relocate_component: 'relocateComponent',
+  create_keepout_rect: 'createKeepoutRect',
+  delete_region: 'deleteRegion',
+  create_pour_rect: 'createPourRect',
+  delete_pour: 'deletePour',
+  create_differential_pair: 'createDifferentialPair',
+  delete_differential_pair: 'deleteDifferentialPair',
+  list_differential_pairs: 'listDifferentialPairs',
+  create_equal_length_group: 'createEqualLengthGroup',
+  delete_equal_length_group: 'deleteEqualLengthGroup',
+  list_equal_length_groups: 'listEqualLengthGroups',
+  run_drc: 'runDRC',
+  get_pads: 'getPads',
+  get_board_info: 'getBoardInfo',
+  open_document: 'openDocument',
+  get_schematic_state: 'getSchematicState',
+  get_netlist: 'getNetlist',
+  run_sch_drc: 'runSchDrc',
+  create_pcb_component: 'createPcbComponent',
+};
+
+// 全局常量替换（避免引用插件基础设施）
+function sanitize(jsText, name) {
+  return jsText
+    .replace(/\$\{BRIDGE_DIR\}\\screenshot\\.png/g, 'the editor (screenshot unavailable)')
+    .replace(/\$\{BRIDGE_DIR\}/g, 'the editor (screenshot unavailable)')
+    .replace(/BRIDGE_DIR/g, 'the editor (screenshot unavailable)')
+    .replace(/APP_NAME/g, "'jlceda-mcp'")
+    .replace(/APP_VERSION/g, "'1.0.0'");
+}
+
+const EXTRA_HELPERS = {
+  round3: `function round3(n) { return Math.round((Number(n) + Number.EPSILON) * 1000) / 1000; }`,
+};
+
+// ─── 5. 生成 ─────────────────────────────────────────────────────────
+const entries = [];
+for (const [action, root] of Object.entries(DISPATCH)) {
+  if (!fns.has(root)) {
+    console.error(`[warn] action ${action}: root handler ${root} not found, skipped`);
+    continue;
+  }
+  const closureSet = closure(root);
+  const pre = [];
+  const sorted = [...closureSet].filter((n) => n !== root).sort();
+  for (const n of sorted) {
+    const fn = fns.get(n);
+    pre.push(sanitize(toJs(fn.full), n));
+  }
+  for (const [ehName, ehSrc] of Object.entries(EXTRA_HELPERS)) {
+    const used = [...closureSet].some((n) => {
+      const fn = fns.get(n);
+      return fn && new RegExp(`\\b${ehName}\\s*\\(`).test(fn.full);
+    });
+    if (used) pre.push(ehSrc);
+  }
+  const rootJs = sanitize(toJs(fns.get(root).full), root);
+  entries.push({ action, root, pre, rootJs });
+}
+
+const lines = [];
+lines.push(`// AUTO-GENERATED by scripts/port-plugin.mjs — DO NOT EDIT.`);
+lines.push(`// 从 legacy-jlc-bridge 移植（基于 EasyEDA Pro 官方 eda.* 扩展 API）。`);
+lines.push(`// 每个条目：pre = 所需辅助函数（纯 JS），rootJs = 根处理函数。`);
+lines.push(`// 运行：npm run port`);
+lines.push(``);
+lines.push(`export interface GeneratedAction {`);
+lines.push(`  /** 辅助函数前置代码 */`);
+lines.push(`  pre: string;`);
+lines.push(`  /** 根处理函数（async function，使用 params 变量） */`);
+lines.push(`  rootJs: string;`);
+lines.push(`}`);
+lines.push(``);
+lines.push(`export const GENERATED_ACTIONS: Record<string, GeneratedAction> = {`);
+for (const e of entries) {
+  lines.push(`  ${JSON.stringify(e.action)}: {`);
+  lines.push(`    pre: ${JSON.stringify(e.pre.join('\n\n'))},`);
+  lines.push(`    rootJs: ${JSON.stringify(e.rootJs)},`);
+  lines.push(`  },`);
+}
+lines.push(`};`);
+lines.push(``);
+lines.push(`/** 支持的动作清单 */`);
+lines.push(`export const SUPPORTED_ACTIONS: string[] = Object.keys(GENERATED_ACTIONS);`);
+
+fs.writeFileSync(OUT, lines.join('\n'), 'utf8');
+console.log(`✔ generated ${OUT}`);
+console.log(`✔ actions: ${entries.length}`);
+for (const e of entries) {
+  const size = e.pre.join('\n\n').length + e.rootJs.length;
+  console.log(`  - ${e.action.padEnd(26)} pre=${String(e.pre.length).padStart(3)} fns  ~${(size / 1024).toFixed(1)}KB`);
+}
+
+// ─── 6. 自检：每个 action 生成的代码必须可被 AsyncFunction 解析 ─────
+console.log('\n── 语法自检（new AsyncFunction(eda, code)）──');
+let okCount = 0;
+for (const e of entries) {
+  const params = {};
+  const code = `(async () => {\n${e.pre.join('\n\n')}\nconst params = ${JSON.stringify(params)};\nreturn await (${e.rootJs})(params);\n})()`;
+  try {
+    // eslint-disable-next-line no-new-func
+    new Function('eda', code);
+    okCount++;
+  } catch (err) {
+    console.error(`  ✗ ${e.action}: ${err.message}`);
+  }
+}
+console.log(`✔ ${okCount}/${entries.length} 语法通过`);

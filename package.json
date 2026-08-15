@@ -1,12 +1,15 @@
 {
   "name": "@jlcextention/mcp-server",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "port": "node scripts/port-plugin.mjs",
+    "start:bridge": "node scripts/bridge-server.mjs",
+    "test:bridge": "node scripts/smoke-bridge.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

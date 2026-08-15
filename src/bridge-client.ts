@@ -1,119 +1,68 @@
-import WebSocket from 'ws';
-import { randomUUID } from 'crypto';
-
-const COMMAND_TIMEOUT_MS = 60_000;
-const RECONNECT_DELAY_MS = 3_000;
-
-interface BridgeCommand {
-  type: 'command';
-  id: string;
-  timestamp: number;
-  payload: { action: string; params: Record<string, unknown> };
-}
-
-interface BridgeResult {
-  type: 'result';
-  id: string;
-  timestamp: number;
-  payload: {
-    commandId: string;
-    success: boolean;
-    data?: unknown;
-    error?: string;
-    durationMs: number;
-  };
-}
-
-type PendingResolve = {
-  resolve: (data: unknown) => void;
-  reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-};
+/**
+ * bridge-client.ts
+ *
+ * 与旧版保持相同接口（command(action, params)），但底层改为官方 Bridge Server：
+ *
+ *   MCP 工具/Agent ── command(action, params) ──> codegen 生成 eda 代码
+ *        ── POST /execute ──> 官方 Bridge Server（49620-49629）
+ *        ── WS /eda ──> Run API Gateway 扩展 ──> 嘉立创EDA专业版
+ *
+ * 环境变量：
+ *   GATEWAY_BASE_URL    显式指定 Bridge Server 地址（默认自动扫描 49620-49629）
+ *   AUTO_SPAWN_BRIDGE   未发现时是否自动拉起 scripts/bridge-server.mjs（默认 true）
+ *   BRIDGE_SERVER_PATH  自定义 bridge-server.mjs 路径
+ *   KILL_BRIDGE_ON_EXIT 退出时是否结束自拉起的 Bridge Server（默认不结束，官方单例共享）
+ */
+import { GatewayClient } from './gateway-client.js';
+import { actionToCode } from './codegen.js';
 
 export class BridgeClient {
-  private ws: WebSocket | null = null;
-  private url: string;
-  private pending = new Map<string, PendingResolve>();
+  private gw: GatewayClient;
   private connected = false;
-  private shouldReconnect = true;
 
-  constructor(url?: string) {
-    this.url = url ?? process.env.GATEWAY_WS_URL ?? 'ws://127.0.0.1:18800/ws/bridge';
+  constructor(opts?: { baseUrl?: string; autoSpawn?: boolean; bridgeServerPath?: string }) {
+    this.gw = new GatewayClient(opts ?? {});
   }
 
+  /** 确保 Bridge Server 可用（发现或拉起）。惰性调用。 */
   async connect(): Promise<void> {
     if (this.connected) return;
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url);
-      ws.on('open', () => {
-        this.ws = ws;
-        this.connected = true;
-        resolve();
-      });
-      ws.on('message', (raw) => this.handleMessage(raw.toString()));
-      ws.on('close', () => this.handleClose());
-      ws.on('error', (err) => {
-        if (!this.connected) reject(err);
-      });
-    });
+    await this.gw.ensureBridge();
+    this.connected = true;
   }
 
-  private handleMessage(raw: string): void {
-    try {
-      const msg = JSON.parse(raw) as BridgeResult;
-      if (msg.type === 'result' && msg.payload?.commandId) {
-        const p = this.pending.get(msg.payload.commandId);
-        if (p) {
-          clearTimeout(p.timer);
-          this.pending.delete(msg.payload.commandId);
-          if (msg.payload.success) {
-            p.resolve(msg.payload.data);
-          } else {
-            p.reject(new Error(msg.payload.error ?? 'Bridge command failed'));
-          }
-        }
-      }
-    } catch { /* ignore non-JSON */ }
-  }
-
-  private handleClose(): void {
-    this.connected = false;
-    this.ws = null;
-    // Reject all pending commands
-    for (const [, p] of this.pending) {
-      clearTimeout(p.timer);
-      p.reject(new Error('WebSocket disconnected'));
-    }
-    this.pending.clear();
-    if (this.shouldReconnect) {
-      setTimeout(() => this.connect().catch(() => {}), RECONNECT_DELAY_MS);
-    }
-  }
-
+  /** 执行经典动作（自动 codegen → execute） */
   async command(action: string, params: Record<string, unknown> = {}): Promise<unknown> {
-    if (!this.ws || !this.connected) {
-      await this.connect();
-    }
-    const id = randomUUID();
-    const cmd: BridgeCommand = {
-      type: 'command',
-      id,
-      timestamp: Date.now(),
-      payload: { action, params },
-    };
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Bridge command '${action}' timed out after ${COMMAND_TIMEOUT_MS}ms`));
-      }, COMMAND_TIMEOUT_MS);
-      this.pending.set(id, { resolve, reject, timer });
-      this.ws!.send(JSON.stringify(cmd));
-    });
+    await this.connect();
+    const code = actionToCode(action, params);
+    return this.gw.execute(code);
+  }
+
+  /** 直接执行自定义 eda 代码（高级工具用） */
+  async executeRaw(code: string, windowId?: string): Promise<unknown> {
+    await this.connect();
+    return this.gw.execute(code, windowId);
+  }
+
+  /** 官方 Bridge Server 健康状态（含 EDA 连接数） */
+  async health() {
+    await this.connect();
+    return this.gw.health();
+  }
+
+  async listWindows() {
+    await this.connect();
+    return this.gw.listWindows();
+  }
+
+  async selectWindow(windowId: string) {
+    await this.connect();
+    return this.gw.selectWindow(windowId);
   }
 
   disconnect(): void {
-    this.shouldReconnect = false;
-    this.ws?.close();
+    this.gw.disconnect();
+    this.connected = false;
   }
 
   get isConnected(): boolean {

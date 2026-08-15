@@ -9,8 +9,11 @@ export function registerStateTools(server: any, bridge: BridgeClient) {
 
   server.tool('pcb_screenshot', '截取当前 PCB 编辑器截图', {}, async () => {
     const data = await bridge.command('screenshot') as any;
-    if (data?.image) {
-      return { content: [{ type: 'image' as const, data: data.image, mimeType: 'image/png' }] };
+    const url = data?.imageDataUrl || data?.image;
+    if (typeof url === 'string' && url.startsWith('data:image/')) {
+      const mimeType = url.slice(5, url.indexOf(';'));
+      const b64 = url.slice(url.indexOf(',') + 1);
+      return { content: [{ type: 'image' as const, data: b64, mimeType }] };
     }
     return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
   });

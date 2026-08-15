@@ -10,13 +10,14 @@ import { registerAdvancedTools } from './tools/advanced.js';
 import { registerSchematicTools } from './tools/schematic.js';
 import { registerAgentTools } from './tools/agent.js';
 import { registerCalculatorTools } from './tools/calculators.js';
+import { registerGatewayTools } from './tools/gateway.js';
 
 async function main() {
   const bridge = new BridgeClient();
 
   const server = new McpServer({
     name: 'jlceda',
-    version: '0.1.0',
+    version: '1.0.0',
   });
 
   // Register all tool groups
@@ -29,8 +30,10 @@ async function main() {
   registerSchematicTools(server, bridge);
   registerAgentTools(server, bridge);
   registerCalculatorTools(server);
+  registerGatewayTools(server, bridge);
 
-  // Connect bridge (lazy — will connect on first command)
+  // 首次调用工具时惰性连接官方 Bridge Server（自动发现/拉起）
+  process.stderr.write('[jlceda] 官方栈: Run API Gateway + easyeda-api-skill (端口 49620-49629)\n');
   // Start MCP stdio transport
   const transport = new StdioServerTransport();
   await server.connect(transport);
