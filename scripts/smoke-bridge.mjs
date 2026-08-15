@@ -161,7 +161,10 @@ const fakeEda = {
   sch_PrimitiveComponent: { getAll: async () => [] },
   sch_PrimitivePin: { getAll: async () => [] },
   sch_PrimitiveWire: { getAll: async () => [] },
-  sch_Netlist: { getNetlist: async () => '(mock netlist)' },
+  sch_Netlist: {
+    getNetlist: async () => '(mock netlist)',
+    setNetlist: async (type, netlist) => { fakeEda.__setNetlist = { type, netlist }; return undefined; },
+  },
   sch_Drc: { check: async () => true },
   sys_Canvas: { toDataURL: async () => undefined },
 };
@@ -343,6 +346,35 @@ assert(routeOA.mode === 'single_layer_obstacle_aware', 'route_oa: 单层障碍�
 
 const bomLCSC = await pro.exportBom(realBridge, { lcscCodes: { 'R-10k': 'C25744' } });
 assert(bomLCSC.items[0].lcscCode === 'C25744', 'bom_lcsc: 料号映射生效');
+
+
+// ─── 7. 高级功能 v4（网表→原理图 / eprj3）───────────────────────────
+const p2 = pro.netlistToProtel2(await pro.netlistReport(realBridge));
+assert(p2.includes('[VCC') && p2.includes('U1-1'), 'protel2: VCC 网络含引脚');
+
+const gen = await pro.schGenerateFromNetlist(realBridge, { netlist: p2, type: 'Protel2' });
+assert(gen.ok === true, 'sch_gen: setNetlist 调用成功');
+assert(fakeEda.__setNetlist?.type === 'Protel2', 'sch_gen: 类型 Protel2');
+
+const genPcb = await pro.schGenerateFromPcb(realBridge, {});
+assert(genPcb.ok === true, 'sch_from_pcb: 一键生成成功');
+assert(fakeEda.__setNetlist?.netlist.includes('['), 'sch_from_pcb: 网表格式正确');
+
+// eprj3 工程检查器（临时 fixture）
+const os = await import('node:os');
+const fsx = await import('node:fs');
+const fxDir = fsx.mkdtempSync(path.join(os.tmpdir(), 'jlcmcp-eprj3-'));
+fsx.writeFileSync(path.join(fxDir, 'Demo.eprj3'), JSON.stringify({ type: 'PROJECT', name: 'Demo', version: 3 }));
+fsx.mkdirSync(path.join(fxDir, 'sch', 'Main'), { recursive: true });
+fsx.mkdirSync(path.join(fxDir, 'pcb'), { recursive: true });
+fsx.writeFileSync(path.join(fxDir, 'sch', 'Main', 'Sheet1.esch2'), '{"type":"DOCHEAD"}\n{"type":"META","title":"Sheet1"}\n{"type":"COMPONENT","designator":"U1"}\n{"type":"WIRE","net":"GND"}\n');
+fsx.writeFileSync(path.join(fxDir, 'pcb', 'Board.epcb2'), '{"type":"DOCHEAD"}\n{"type":"META"}\n{"type":"COMPONENT"}\n');
+const eprj = await pro.eprj3ProjectInfo(fxDir);
+assert(eprj.kind === 'project-folder', 'eprj3: 目录解析');
+assert(eprj.schematicSheets.includes('sch/Main/Sheet1.esch2'), 'eprj3: 识别原理图');
+assert(eprj.pcbFiles.includes('pcb/Board.epcb2'), 'eprj3: 识别 PCB');
+const eprjFile = await pro.eprj3ProjectInfo(path.join(fxDir, 'sch', 'Main', 'Sheet1.esch2'));
+assert(eprjFile.recordTypes?.COMPONENT === 1, 'eprj3: 源文件记录统计');
 
 mockWs.close();
 console.log('\n==== 结果: ' + pass + ' 通过 / ' + fail + ' 失败 ====');

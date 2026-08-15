@@ -5,6 +5,8 @@
  * 数据通过 bridge.command / bridge.executeRaw 获取与写回。
  */
 import { z } from 'zod';
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { BridgeClient } from '../bridge-client.js';
 
 // ─── 类型 ────────────────────────────────────────────────────────────
@@ -585,6 +587,133 @@ export async function designDiff(bridge: BridgeClient): Promise<any> {
   return { added, removed, moved, addedCount: added.length, removedCount: removed.length, movedCount: moved.length };
 }
 
+
+// ─── 15. 网表 → 原理图（官方 sch_Netlist.setNetlist）────────────────
+export const NETLIST_TYPES = ['EasyEDA', 'JLCEDA', 'Protel2', 'PADS', 'Allegro', 'DISA', 'DSNET'] as const;
+
+export async function schGenerateFromNetlist(bridge: BridgeClient, params: { netlist: string; type?: string }): Promise<any> {
+  const netlist = String(params.netlist ?? '');
+  if (!netlist.trim()) throw new Error('netlist 不能为空');
+  const type = params.type ?? 'Protel2';
+  if (!(NETLIST_TYPES as readonly string[]).includes(type)) {
+    throw new Error('不支持的网表类型: ' + type + '（可选: ' + NETLIST_TYPES.join(', ') + '）');
+  }
+  const code =
+    'const r = await eda.sch_Netlist.setNetlist(' + JSON.stringify(type) + ', ' + JSON.stringify(netlist) + ');' +
+    'return { ok: true, type: ' + JSON.stringify(type) + ', netlistLength: ' + JSON.stringify(netlist.length) + ' };';
+  const data = await bridge.executeRaw(code);
+  return { ok: (data as any)?.ok ?? true, type, netlistLength: netlist.length, note: '已调用官方 sch_Netlist.setNetlist(' + type + ') 更新原理图网表' };
+}
+
+/** 把 PCB 网表报告转为 Protel2 格式文本 */
+export function netlistToProtel2(report: any): string {
+  const nets = Array.isArray(report?.nets) ? report.nets : [];
+  const blocks: string[] = [];
+  for (const n of nets) {
+    const name = String(n.net || '');
+    if (!name) continue;
+    const pins = Array.isArray(n.designators) ? n.designators : [];
+    const lines = [name];
+    // 需要引脚级信息：从 components 里查
+    const comps = Array.isArray(report?.components) ? report.components : [];
+    for (const c of comps) {
+      const pinsOf = Array.isArray(c?.pins) ? c.pins : [];
+      for (const p of pinsOf) {
+        if (p.net === name) lines.push(c.designator + '-' + p.pin);
+      }
+    }
+    blocks.push('[' + lines.join('\n') + ']');
+  }
+  return blocks.join('\n\n');
+}
+
+export async function schGenerateFromPcb(bridge: BridgeClient, params: { type?: string }): Promise<any> {
+  const report: any = await netlistReport(bridge);
+  const protel2 = netlistToProtel2(report);
+  const imp = await schGenerateFromNetlist(bridge, { netlist: protel2, type: params.type ?? 'Protel2' });
+  return { ...imp, source: 'pcb_netlist_report', protel2Netlist: protel2 };
+}
+
+// ─── 16. eprj3 工程检查器 ────────────────────────────────────────────
+const EPRJ3_EXTS = ['.eprj3', '.esch2', '.epcb2', '.epan2', '.ecfg', '.evar'];
+
+export async function eprj3ProjectInfo(projectPath: string): Promise<any> {
+  const p = String(projectPath || '').trim();
+  if (!p) throw new Error('projectPath 不能为空');
+  if (!existsSync(p)) throw new Error('路径不存在: ' + p);
+
+  const stat = statSync(p);
+  if (stat.isFile()) {
+    const ext = path.extname(p).toLowerCase();
+    if (!EPRJ3_EXTS.includes(ext)) throw new Error('不是 eprj3 工程文件: ' + ext);
+    const raw = readFileSync(p, 'utf8');
+    if (ext === '.eprj3') {
+      let json: any;
+      try { json = JSON.parse(raw); } catch { json = null; }
+      return { kind: 'project-index', file: path.basename(p), sizeBytes: raw.length, keys: json ? Object.keys(json) : [], json };
+    }
+    // JSON-lines 记录文件（.esch2/.epcb2/.epan2/.ecfg/.evar）
+    const records = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+    const byType = new Map<string, number>();
+    let meta: any = null;
+    let parsed = 0;
+    for (const line of records) {
+      try {
+        const obj = JSON.parse(line);
+        if (obj && typeof obj.type === 'string') {
+          byType.set(obj.type, (byType.get(obj.type) || 0) + 1);
+          if (obj.type === 'META' && meta === null) meta = obj;
+        }
+        parsed += 1;
+      } catch { /* 跳过非 JSON 行 */ }
+    }
+    return {
+      kind: 'source-records',
+      file: path.basename(p),
+      recordCount: records.length,
+      parsedRecords: parsed,
+      recordTypes: Object.fromEntries(byType),
+      meta,
+    };
+  }
+
+  // 目录：工程根
+  const entries = readdirSync(p);
+  const eprj3File = entries.find((f) => f.toLowerCase().endsWith('.eprj3'));
+  let index: any = null;
+  if (eprj3File) {
+    try { index = JSON.parse(readFileSync(path.join(p, eprj3File), 'utf8')); } catch { index = null; }
+  }
+  const collect = (dir: string, ext: string): string[] => {
+    const abs = path.join(p, dir);
+    if (!existsSync(abs) || !statSync(abs).isDirectory()) return [];
+    const results: string[] = [];
+    const walkDir = (d: string) => {
+      for (const f of readdirSync(d)) {
+        const full = path.join(d, f);
+        if (statSync(full).isDirectory()) walkDir(full);
+        else if (f.toLowerCase().endsWith(ext)) results.push(path.relative(p, full));
+      }
+    };
+    walkDir(abs);
+    return results;
+  };
+  const schematics = collect('sch', '.esch2');
+  const pcbs = collect('pcb', '.epcb2');
+  const panels = collect('panel', '.epan2');
+  const schematicNames = readdirSync(path.join(p, 'sch')).filter((f) => statSync(path.join(p, 'sch', f)).isDirectory()).filter(() => true).slice(0, 50);
+  return {
+    kind: 'project-folder',
+    projectName: eprj3File ? eprj3File.replace(/\.eprj3$/i, '') : '(未找到 .eprj3)',
+    eprj3File: eprj3File || null,
+    indexKeys: index ? Object.keys(index) : [],
+    schematicFolders: schematicNames,
+    schematicSheets: schematics,
+    pcbFiles: pcbs,
+    panelFiles: panels,
+  };
+}
+
 // ─── MCP 注册 ────────────────────────────────────────────────────────
 export function registerProTools(server: any, bridge: BridgeClient) {
   server.tool('pcb_bom_export', '导出 PCB BOM（按元件名聚合：数量、位号、网络、LCSC 料号），返回 JSON + CSV', {
@@ -674,6 +803,27 @@ export function registerProTools(server: any, bridge: BridgeClient) {
 
   server.tool('pcb_design_diff', '对比当前设计与上次快照，报告新增/移除/移动的元件', {}, async () => {
     const data = await designDiff(bridge);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  });
+  server.tool('sch_generate_from_netlist', '通过官方 sch_Netlist.setNetlist 将网表导入原理图（生成原理图）。类型: EasyEDA/JLCEDA/Protel2/PADS/Allegro/DISA/DSNET', {
+    netlist: z.string().describe('网表内容（Protel2 示例: [GND\nU1-1\nR1-2\n]）'),
+    type: z.string().optional().describe('网表格式（默认 Protel2）'),
+  }, async ({ netlist, type }: { netlist: string; type?: string }) => {
+    const data = await schGenerateFromNetlist(bridge, { netlist, type });
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  });
+
+  server.tool('sch_generate_from_pcb', '一键：读取当前 PCB 网表报告 → 转 Protel2 网表 → 导入原理图生成', {
+    type: z.string().optional().describe('网表格式（默认 Protel2）'),
+  }, async ({ type }: { type?: string }) => {
+    const data = await schGenerateFromPcb(bridge, { type });
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  });
+
+  server.tool('pcb_eprj3_project_info', '检查嘉立创EDA专业版 .eprj3 工程（目录或文件）：工程索引、原理图/PCB/面板文件清单，或源文件记录统计（JSON-lines）', {
+    projectPath: z.string().describe('.eprj3 工程根目录路径，或 .eprj3/.epcb2/.esch2 等文件路径'),
+  }, async ({ projectPath }: { projectPath: string }) => {
+    const data = await eprj3ProjectInfo(projectPath);
     return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
   });
 }

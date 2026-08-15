@@ -74,7 +74,7 @@ Run API Gateway 扩展已连接（顶部菜单出现 **API Gateway**）。
 | ANTHROPIC_API_KEY | — | Anthropic API Key（设置后启用 pcb_agent 工具） |
 | AGENT_MODEL | claude-sonnet-4-20250514 | Agent 使用的模型 |
 
-## 工具清单（56 个）
+## 工具清单（59 个）
 
 ### 状态查询 (9)
 pcb_get_state / pcb_screenshot / pcb_run_drc / pcb_get_tracks / pcb_get_pads
@@ -136,6 +136,11 @@ pcb_design_snapshot / pcb_design_diff — 设计快照与差异对比（新增/�
 pcb_auto_route_nets 升级 — 单层障碍规避布线（绕开焊盘+clearance）或两层 L 型（useVias）
 pcb_bom_export 升级 — 支持 lcscCodes 料号映射（LCSC API 受保护无法自动查询）
 
+### 高级功能 v4 (3，v1.4 新增)
+sch_generate_from_netlist — 通过官方 sch_Netlist.setNetlist 导入网表生成原理图（EasyEDA/JLCEDA/Protel2/PADS/Allegro/DISA/DSNET）
+sch_generate_from_pcb — 一键：PCB 网表报告 → Protel2 网表 → 导入原理图生成
+pcb_eprj3_project_info — .eprj3 工程检查器（目录/文件：索引、原理图/PCB/面板清单、源文件记录统计）
+
 ## 项目结构
 
 ```
@@ -160,7 +165,7 @@ pcb_bom_export 升级 — 支持 lcscCodes 料号映射（LCSC API 受保护无�
 
 ```bash
 npm run build
-npm run test:bridge   # 66 项协议级断言（无需 EDA）
+npm run test:bridge   # 75 项协议级断言（无需 EDA）
 ```
 
 ## 迁移说明（v0.1 → v1.0）
