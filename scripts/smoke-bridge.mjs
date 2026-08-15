@@ -40,14 +40,19 @@ async function ensureBridge() {
 }
 
 // ─── 2. Mock EDA 客户端 ─────────────────────────────────────────────
+const mockComps = [
+  { id: 'prim-U1', designator: 'U1', x: 1000, y: 2000, rotation: 0 },
+  { id: 'prim-R1', designator: 'R1', x: 1000, y: 2000, rotation: 0 },
+];
 function compRow(designator) {
+  const c = mockComps.find((m) => m.designator === designator) || { id: 'prim-' + designator, designator, x: 1000, y: 2000, rotation: 0 };
   return {
-    getState_PrimitiveId: () => 'prim-' + designator,
-    getState_Designator: () => designator,
+    getState_PrimitiveId: () => c.id,
+    getState_Designator: () => c.designator,
     getState_Name: () => 'R-10k',
-    getState_X: () => 1000,
-    getState_Y: () => 2000,
-    getState_Rotation: () => 0,
+    getState_X: () => c.x,
+    getState_Y: () => c.y,
+    getState_Rotation: () => c.rotation,
     getState_Width: () => 100,
     getState_Height: () => 50,
     getState_Layer: () => 1,
@@ -59,8 +64,16 @@ function compRow(designator) {
 const fakeEda = {
   pcb_PrimitiveComponent: {
     getAll: async () => [compRow('U1'), compRow('R1')],
-    modify: async (id, props) => { (fakeEda.__modifyLog ||= []).push({ id, props }); },
-    create: async (c, layer, x, y, rotation, lock) => compRow('NEW1'),
+    modify: async (id, props) => {
+      const c = mockComps.find((m) => m.id === id);
+      if (c) {
+        if (props.x !== undefined) c.x = props.x;
+        if (props.y !== undefined) c.y = props.y;
+        if (props.rotation !== undefined) c.rotation = props.rotation;
+      }
+      (fakeEda.__modifyLog ||= []).push({ id, props });
+    },
+    create: async (c, layer, x, y, rotation, lock) => { mockComps.push({ id: 'prim-NEW1', designator: 'NEW1', x, y, rotation: rotation ?? 0 }); return compRow('NEW1'); },
   },
   pcb_Net: {
     getAllNetsName: async () => ['GND', 'VCC', 'SDA'],
@@ -305,6 +318,31 @@ assert(typeof healthRpt.score === 'string', 'health: 有评分');
 const pipe = await pro.autoFanoutAndRoute(realBridge);
 assert(pipe.routing.routedNets >= 2, 'pipeline: 自动布线 >= 2 网络');
 assert(typeof pipe.drcAfter.passed === 'boolean', 'pipeline: DRC 复检');
+
+
+// ─── 6. 高级功能 v3 ──────────────────────────────────────────────────
+const place = await pro.autoPlaceComponents(realBridge, {});
+assert(place.moved >= 1, 'auto_place: 至少移动 1 个元件');
+assert(place.totalComponents === 2, 'auto_place: 2 个元件');
+
+const nl = await pro.netlistReport(realBridge);
+assert(nl.componentCount === 2, 'netlist: 2 个元件');
+assert(nl.nets.some((n) => n.net === 'VCC'), 'netlist: 含 VCC 网络');
+
+const snap = await pro.designSnapshot(realBridge);
+assert(snap.snapshotTaken === true, 'snapshot: 已建立');
+
+// 移动一个元件后 diff
+await realBridge.command('move_component', { designator: 'R1', x: 5000, y: 5000, rotation: 0 });
+const diff = await pro.designDiff(realBridge);
+assert(diff.moved.some((m) => m.designator === 'R1'), 'diff: 检测到 R1 移动');
+
+const routeOA = await pro.autoRouteNets(realBridge, { nets: ['VCC'], clearance: 20 });
+assert(routeOA.totalTrackSegments >= 1, 'route_oa: 障碍规避布线生成走线');
+assert(routeOA.mode === 'single_layer_obstacle_aware', 'route_oa: 单层障碍规避模式');
+
+const bomLCSC = await pro.exportBom(realBridge, { lcscCodes: { 'R-10k': 'C25744' } });
+assert(bomLCSC.items[0].lcscCode === 'C25744', 'bom_lcsc: 料号映射生效');
 
 mockWs.close();
 console.log('\n==== 结果: ' + pass + ' 通过 / ' + fail + ' 失败 ====');

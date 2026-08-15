@@ -74,7 +74,7 @@ Run API Gateway 扩展已连接（顶部菜单出现 **API Gateway**）。
 | ANTHROPIC_API_KEY | — | Anthropic API Key（设置后启用 pcb_agent 工具） |
 | AGENT_MODEL | claude-sonnet-4-20250514 | Agent 使用的模型 |
 
-## 工具清单（52 个）
+## 工具清单（56 个）
 
 ### 状态查询 (9)
 pcb_get_state / pcb_screenshot / pcb_run_drc / pcb_get_tracks / pcb_get_pads
@@ -129,6 +129,13 @@ pcb_route_differential_pairs — 差分对自动布线（正/负网络平行 L �
 pcb_design_health_report — 一键设计健康报告（BOM+连通性+载流+DRC+间距，READY/NEEDS_WORK/POOR 评分）
 pcb_auto_fanout_and_route — 流水线：全部元件扇出 → 全部网络自动布线 → DRC → 丝印自修复
 
+### 高级功能 v3 (4，v1.3 新增)
+pcb_auto_place_components — 自动布局：元件移动到焊盘质心（一阶优化）
+pcb_netlist_report — 从 PCB 焊盘生成网表报告（元件→引脚→网络 / 网络→元件）
+pcb_design_snapshot / pcb_design_diff — 设计快照与差异对比（新增/移除/移动）
+pcb_auto_route_nets 升级 — 单层障碍规避布线（绕开焊盘+clearance）或两层 L 型（useVias）
+pcb_bom_export 升级 — 支持 lcscCodes 料号映射（LCSC API 受保护无法自动查询）
+
 ## 项目结构
 
 ```
@@ -153,7 +160,7 @@ pcb_auto_fanout_and_route — 流水线：全部元件扇出 → 全部网络自
 
 ```bash
 npm run build
-npm run test:bridge   # 57 项协议级断言（无需 EDA）
+npm run test:bridge   # 66 项协议级断言（无需 EDA）
 ```
 
 ## 迁移说明（v0.1 → v1.0）
