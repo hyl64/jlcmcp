@@ -192,6 +192,160 @@ export async function drcAutoFix(bridge: BridgeClient): Promise<any> {
   };
 }
 
+
+// ─── 7. 元件间距检查 ─────────────────────────────────────────────────
+export async function componentClearanceCheck(bridge: BridgeClient, params: { minClearance?: number }): Promise<any> {
+  const state: any = await bridge.command('get_state');
+  const comps: Comp[] = Array.isArray(state?.components) ? state.components : [];
+  const minClearance = params.minClearance ?? 20; // mil
+  const violations: any[] = [];
+  for (let i = 0; i < comps.length; i += 1) {
+    for (let j = i + 1; j < comps.length; j += 1) {
+      const a = comps[i];
+      const b = comps[j];
+      const dx = Math.abs(a.x - b.x) - (a.width + b.width) / 2;
+      const dy = Math.abs(a.y - b.y) - (a.height + b.height) / 2;
+      const gap = Math.max(dx, 0) === 0 && Math.max(dy, 0) === 0 ? -Math.max(-dx, -dy) : Math.hypot(Math.max(dx, 0), Math.max(dy, 0));
+      if (gap < minClearance) {
+        violations.push({ a: a.designator, b: b.designator, gapMil: Math.round(gap * 10) / 10, minClearance });
+      }
+    }
+  }
+  return {
+    componentCount: comps.length,
+    checkedPairs: (comps.length * (comps.length - 1)) / 2,
+    minClearance,
+    violations,
+    violationCount: violations.length,
+  };
+}
+
+// ─── 8. 差分对布线 ───────────────────────────────────────────────────
+export async function routeDifferentialPairs(bridge: BridgeClient, params: { pairName?: string; layer?: number; width?: number; gap?: number }): Promise<any> {
+  const list: any = await bridge.command('list_differential_pairs');
+  const pairs: any[] = Array.isArray(list?.pairs) ? list.pairs : [];
+  const targets = params.pairName ? pairs.filter((p) => String(p.name) === params.pairName) : pairs;
+  const layer = params.layer ?? 1;
+  const width = params.width ?? 6;
+  const gap = params.gap ?? 8;
+
+  const routed: any[] = [];
+  for (const pair of targets) {
+    const posPads: any = await bridge.command('get_pads', { nets: pair.positiveNet });
+    const negPads: any = await bridge.command('get_pads', { nets: pair.negativeNet });
+    const pos = Array.isArray(posPads?.pads) ? posPads.pads : [];
+    const neg = Array.isArray(negPads?.pads) ? negPads.pads : [];
+    if (pos.length < 2 || neg.length < 2) {
+      routed.push({ pair: pair.name, skipped: '正/负网络焊盘不足' });
+      continue;
+    }
+    // 正网络：L 型链式连接；负网络：在正网络路径基础上横向偏移 gap（保持平行）
+    const posOrder = [...pos].sort((a: any, b: any) => a.x - b.x || a.y - b.y);
+    const negOrder = [...neg].sort((a: any, b: any) => a.x - b.x || a.y - b.y);
+    let segments = 0;
+    for (let i = 0; i < posOrder.length - 1; i += 1) {
+      const a = posOrder[i];
+      const b = posOrder[i + 1];
+      const midX = Math.round((a.x + b.x) / 2);
+      await bridge.command('route_track', { net: pair.positiveNet, points: [{ x: a.x, y: a.y }, { x: midX, y: a.y }], layer, width });
+      await bridge.command('route_track', { net: pair.positiveNet, points: [{ x: midX, y: a.y }, { x: midX, y: b.y }, { x: b.x, y: b.y }], layer, width });
+      segments += 2;
+    }
+    let negSegments = 0;
+    for (let i = 0; i < negOrder.length - 1; i += 1) {
+      const a = negOrder[i];
+      const b = negOrder[i + 1];
+      // 负网络走线整体向 y+gap 偏移，保持与正网络平行
+      const midX = Math.round((a.x + b.x) / 2);
+      await bridge.command('route_track', { net: pair.negativeNet, points: [{ x: a.x, y: a.y + gap }, { x: midX, y: a.y + gap }], layer, width });
+      await bridge.command('route_track', { net: pair.negativeNet, points: [{ x: midX, y: a.y + gap }, { x: midX, y: b.y + gap }, { x: b.x, y: b.y + gap }], layer, width });
+      negSegments += 2;
+    }
+    // 估算等长偏差（按 Manhattan 路径长度）
+    const len = (nets: any[]) => {
+      let total = 0;
+      for (let i = 0; i < nets.length - 1; i += 1) {
+        total += Math.abs(nets[i + 1].x - nets[i].x) + Math.abs(nets[i + 1].y - nets[i].y);
+      }
+      return total;
+    };
+    const posLen = len(posOrder);
+    const negLen = len(negOrder);
+    routed.push({
+      pair: pair.name,
+      positiveNet: pair.positiveNet,
+      negativeNet: pair.negativeNet,
+      positiveSegments: segments,
+      negativeSegments: negSegments,
+      positiveLengthMil: posLen,
+      negativeLengthMil: negLen,
+      lengthDeltaMil: Math.abs(posLen - negLen),
+      note: '平行 L 型走线（负网络 +' + gap + 'mil 偏移），等长偏差用 create_equal_length 校验',
+    });
+  }
+  return { routedPairs: routed.length, layer, width, gap, pairs: routed };
+}
+
+// ─── 9. 设计健康报告 ─────────────────────────────────────────────────
+export async function designHealthReport(bridge: BridgeClient): Promise<any> {
+  const [bom, conn, dens, drc, clear] = await Promise.all([
+    exportBom(bridge),
+    checkConnectivity(bridge),
+    currentDensityReport(bridge),
+    bridge.command('run_drc'),
+    componentClearanceCheck(bridge, {}),
+  ]) as any[];
+  const issues: string[] = [];
+  if (!drc?.passed) issues.push('DRC 存在 ' + (drc?.totalCount ?? 0) + ' 个问题');
+  if ((conn as any).unrouted > 0) issues.push('存在 ' + (conn as any).unrouted + ' 个未布线网络');
+  if ((conn as any).singlePadNets > 0) issues.push('存在 ' + (conn as any).singlePadNets + ' 个单焊盘网络');
+  if ((clear as any).violationCount > 0) issues.push('存在 ' + (clear as any).violationCount + ' 处元件间距违规');
+  if ((dens as any).report.some((r: any) => r.warning)) issues.push('存在载流能力偏低网络');
+  return {
+    generatedAt: new Date().toISOString(),
+    score: issues.length === 0 ? 'READY' : issues.length <= 2 ? 'NEEDS_WORK' : 'POOR',
+    summary: {
+      components: bom.componentCount,
+      bomItems: bom.itemCount,
+      nets: conn.totalNets,
+      routedNets: conn.routed,
+      unrouted: conn.unrouted,
+      drcPassed: Boolean(drc?.passed),
+      drcIssues: Number(drc?.totalCount ?? 0),
+      clearanceViolations: clear.violationCount,
+      currentWarnings: dens.report.filter((r: any) => r.warning).length,
+    },
+    issues,
+    bom: bom.items,
+    connectivity: conn.nets,
+    currentDensity: dens.report,
+    drc: drc?.issues?.slice?.(0, 20) ?? [],
+    clearance: clear.violations.slice(0, 20),
+  };
+}
+
+// ─── 10. 扇出 + 布线 + DRC 流水线 ────────────────────────────────────
+export async function autoFanoutAndRoute(bridge: BridgeClient): Promise<any> {
+  const state: any = await bridge.command('get_state');
+  const comps: Comp[] = Array.isArray(state?.components) ? state.components : [];
+  const fanoutResults: any[] = [];
+  for (const c of comps) {
+    const f = await fanoutComponent(bridge, { designator: c.designator });
+    fanoutResults.push(f);
+  }
+  const route = await autoRouteNets(bridge, {});
+  const drc: any = await bridge.command('run_drc');
+  const fix = await drcAutoFix(bridge);
+  return {
+    fanout: { components: fanoutResults.length, viasCreated: fanoutResults.reduce((s, f) => s + f.fanoutCreated, 0) },
+    routing: route,
+    drcBefore: { passed: drc?.passed, totalCount: drc?.totalCount },
+    autoFixes: fix.fixesApplied,
+    drcAfter: fix.after,
+    note: '流水线：全部元件扇出 → 全部网络自动布线 → DRC → 丝印自动修复。请人工复核后用 pcb_design_health_report 复检。',
+  };
+}
+
 // ─── MCP 注册 ────────────────────────────────────────────────────────
 export function registerProTools(server: any, bridge: BridgeClient) {
   server.tool('pcb_bom_export', '导出 PCB BOM（按元件名聚合：数量、位号、网络），返回 JSON + CSV', {}, async () => {
@@ -230,6 +384,32 @@ export function registerProTools(server: any, bridge: BridgeClient) {
 
   server.tool('pcb_drc_autofix', '运行 DRC 并自动修复可自动处理的问题（当前：丝印冲突），返回修复前后对比', {}, async () => {
     const data = await drcAutoFix(bridge);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  });
+  server.tool('pcb_component_clearance_check', '检查所有元件对的最小间距，标记低于阈值的违规对', {
+    minClearance: z.number().optional().describe('最小间距 mil（默认 20）'),
+  }, async ({ minClearance }: { minClearance?: number }) => {
+    const data = await componentClearanceCheck(bridge, { minClearance });
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  });
+
+  server.tool('pcb_route_differential_pairs', '差分对自动布线：正/负网络平行 L 型走线（负网络偏移 gap），报告等长偏差', {
+    pairName: z.string().optional().describe('指定差分对名称（默认全部）'),
+    layer: z.number().optional().describe('走线层（默认 1 顶层）'),
+    width: z.number().optional().describe('线宽 mil（默认 6）'),
+    gap: z.number().optional().describe('正负线间距 mil（默认 8）'),
+  }, async ({ pairName, layer, width, gap }: { pairName?: string; layer?: number; width?: number; gap?: number }) => {
+    const data = await routeDifferentialPairs(bridge, { pairName, layer, width, gap });
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  });
+
+  server.tool('pcb_design_health_report', '一键输出设计健康报告：BOM + 连通性 + 载流 + DRC + 间距，给出 READY/NEEDS_WORK/POOR 评分', {}, async () => {
+    const data = await designHealthReport(bridge);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  });
+
+  server.tool('pcb_auto_fanout_and_route', '流水线：全部元件扇出 → 全部网络自动布线 → DRC → 丝印自修复', {}, async () => {
+    const data = await autoFanoutAndRoute(bridge);
     return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
   });
 }

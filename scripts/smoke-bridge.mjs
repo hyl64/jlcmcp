@@ -85,6 +85,10 @@ const fakeEda = {
       { getState_PrimitiveId: () => 'pad3', getState_Net: () => 'VCC', getState_X: () => 500, getState_Y: () => 600, getState_Designator: () => 'R1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
       { getState_PrimitiveId: () => 'pad4', getState_Net: () => 'SDA', getState_X: () => 900, getState_Y: () => 300, getState_Designator: () => 'R1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
       { getState_PrimitiveId: () => 'pad5', getState_Net: () => 'SDA', getState_X: () => 1200, getState_Y: () => 700, getState_Designator: () => 'U1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
+      { getState_PrimitiveId: () => 'pad6', getState_Net: () => 'USB_DP', getState_X: () => 300, getState_Y: () => 400, getState_Designator: () => 'U1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
+      { getState_PrimitiveId: () => 'pad7', getState_Net: () => 'USB_DP', getState_X: () => 700, getState_Y: () => 900, getState_Designator: () => 'R1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
+      { getState_PrimitiveId: () => 'pad8', getState_Net: () => 'USB_DN', getState_X: () => 320, getState_Y: () => 420, getState_Designator: () => 'U1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
+      { getState_PrimitiveId: () => 'pad9', getState_Net: () => 'USB_DN', getState_X: () => 720, getState_Y: () => 920, getState_Designator: () => 'R1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
     ],
   },
   pcb_PrimitiveVia: {
@@ -274,8 +278,8 @@ const dens = await pro.currentDensityReport(realBridge);
 assert(dens.report.find((n) => n.net === 'GND')?.trackCount === 1, 'density: GND 有 1 条走线');
 
 const fan = await pro.fanoutComponent(realBridge, { designator: 'U1' });
-assert(fan.padCount === 3, 'fanout: U1 有 3 个焊盘');
-assert(fan.fanoutCreated === 3, 'fanout: 创建 3 个过孔');
+assert(fan.padCount === 5, 'fanout: U1 有 5 个焊盘');
+assert(fan.fanoutCreated === 5, 'fanout: 创建 5 个过孔');
 
 const route = await pro.autoRouteNets(realBridge, { nets: ['VCC', 'SDA'] });
 assert(route.routedNets === 2, 'auto_route: 布线 2 个网络');
@@ -283,6 +287,24 @@ assert(route.totalTrackSegments >= 2, 'auto_route: 生成走线段');
 
 const fix = await pro.drcAutoFix(realBridge);
 assert(fix.after.passed === true, 'drc_autofix: DRC 通过');
+
+
+// ─── 5. 高级功能 v2 ──────────────────────────────────────────────────
+const clear = await pro.componentClearanceCheck(realBridge, {});
+assert(clear.componentCount === 2, 'clearance: 2 个元件');
+assert(typeof clear.violationCount === 'number', 'clearance: 返回违规数');
+
+const diffs = await pro.routeDifferentialPairs(realBridge, {});
+assert(diffs.routedPairs === 1, 'diff_pair: 1 个差分对');
+assert(diffs.pairs[0].positiveSegments >= 1, 'diff_pair: 正网络已布线');
+
+const healthRpt = await pro.designHealthReport(realBridge);
+assert(healthRpt.summary.nets === 3, 'health: 3 个网络');
+assert(typeof healthRpt.score === 'string', 'health: 有评分');
+
+const pipe = await pro.autoFanoutAndRoute(realBridge);
+assert(pipe.routing.routedNets >= 2, 'pipeline: 自动布线 >= 2 网络');
+assert(typeof pipe.drcAfter.passed === 'boolean', 'pipeline: DRC 复检');
 
 mockWs.close();
 console.log('\n==== 结果: ' + pass + ' 通过 / ' + fail + ' 失败 ====');

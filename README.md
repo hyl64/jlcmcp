@@ -74,7 +74,7 @@ Run API Gateway 扩展已连接（顶部菜单出现 **API Gateway**）。
 | ANTHROPIC_API_KEY | — | Anthropic API Key（设置后启用 pcb_agent 工具） |
 | AGENT_MODEL | claude-sonnet-4-20250514 | Agent 使用的模型 |
 
-## 工具清单（49 个）
+## 工具清单（52 个）
 
 ### 状态查询 (9)
 pcb_get_state / pcb_screenshot / pcb_run_drc / pcb_get_tracks / pcb_get_pads
@@ -123,6 +123,12 @@ pcb_fanout_component — 为指定元件所有焊盘创建扇出过孔
 pcb_auto_route_nets — 基础自动布线（L 型两层：顶层水平+底层垂直+过孔，需 DRC 复查）
 pcb_drc_autofix — DRC 自修复（当前支持丝印冲突自动排列），返回修复前后对比
 
+### 高级功能 v2 (4，v1.2 新增)
+pcb_component_clearance_check — 元件两两间距检查，标记低于阈值的违规对
+pcb_route_differential_pairs — 差分对自动布线（正/负网络平行 L 型，报告等长偏差）
+pcb_design_health_report — 一键设计健康报告（BOM+连通性+载流+DRC+间距，READY/NEEDS_WORK/POOR 评分）
+pcb_auto_fanout_and_route — 流水线：全部元件扇出 → 全部网络自动布线 → DRC → 丝印自修复
+
 ## 项目结构
 
 ```
@@ -147,7 +153,7 @@ pcb_drc_autofix — DRC 自修复（当前支持丝印冲突自动排列），�
 
 ```bash
 npm run build
-npm run test:bridge   # 39 项协议级断言（无需 EDA）
+npm run test:bridge   # 57 项协议级断言（无需 EDA）
 ```
 
 ## 迁移说明（v0.1 → v1.0）
