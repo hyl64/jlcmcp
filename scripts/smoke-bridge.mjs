@@ -11,6 +11,7 @@ import WebSocket from 'ws';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { BridgeClient } from '../dist/bridge-client.js';
 
 const ROOT = process.cwd();
 
@@ -78,15 +79,13 @@ const fakeEda = {
     delete: async () => true,
   },
   pcb_PrimitivePad: {
-    getAll: async () => [{
-      getState_PrimitiveId: () => 'pad1',
-      getState_Net: () => 'GND',
-      getState_X: () => 10, getState_Y: () => 20,
-      getState_Designator: () => 'U1',
-      getState_PrimitiveLock: () => false,
-      getState_Diameter: () => 30,
-      getState_Shape: () => 'round',
-    }],
+    getAll: async () => [
+      { getState_PrimitiveId: () => 'pad1', getState_Net: () => 'GND', getState_X: () => 10, getState_Y: () => 20, getState_Designator: () => 'U1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
+      { getState_PrimitiveId: () => 'pad2', getState_Net: () => 'VCC', getState_X: () => 100, getState_Y: () => 200, getState_Designator: () => 'U1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
+      { getState_PrimitiveId: () => 'pad3', getState_Net: () => 'VCC', getState_X: () => 500, getState_Y: () => 600, getState_Designator: () => 'R1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
+      { getState_PrimitiveId: () => 'pad4', getState_Net: () => 'SDA', getState_X: () => 900, getState_Y: () => 300, getState_Designator: () => 'R1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
+      { getState_PrimitiveId: () => 'pad5', getState_Net: () => 'SDA', getState_X: () => 1200, getState_Y: () => 700, getState_Designator: () => 'U1', getState_PrimitiveLock: () => false, getState_Diameter: () => 30, getState_Shape: () => 'round' },
+    ],
   },
   pcb_PrimitiveVia: {
     getAll: async () => [],
@@ -257,6 +256,33 @@ assert(state.nets?.length === 3, 'get_state returns 3 nets');
 const moveCall = (fakeEda.__modifyLog || []).find((m) => m.id === 'prim-U1');
 assert(moveCall?.props?.x === 1500, 'move_component modified x=1500');
 assert(moveCall?.props?.rotation === 90, 'move_component modified rotation=90');
+
+
+// ─── 4. 高级功能测试（真实 BridgeClient 走官方协议）─────────────────
+const pro = await import(pathToFileURL(path.join(ROOT, 'dist/tools/pro.js')).href);
+const realBridge = new BridgeClient({ baseUrl: 'http://127.0.0.1:' + port });
+
+const bom = await pro.exportBom(realBridge);
+assert(bom.itemCount === 1, 'BOM: 1 类元件（R-10k x2）');
+assert(bom.items[0].quantity === 2, 'BOM: R-10k 数量 2');
+
+const conn = await pro.checkConnectivity(realBridge);
+assert(conn.totalNets === 3, 'connectivity: 3 个网络');
+assert(conn.nets.find((n) => n.net === 'VCC')?.padCount === 2, 'connectivity: VCC 有 2 个焊盘');
+
+const dens = await pro.currentDensityReport(realBridge);
+assert(dens.report.find((n) => n.net === 'GND')?.trackCount === 1, 'density: GND 有 1 条走线');
+
+const fan = await pro.fanoutComponent(realBridge, { designator: 'U1' });
+assert(fan.padCount === 3, 'fanout: U1 有 3 个焊盘');
+assert(fan.fanoutCreated === 3, 'fanout: 创建 3 个过孔');
+
+const route = await pro.autoRouteNets(realBridge, { nets: ['VCC', 'SDA'] });
+assert(route.routedNets === 2, 'auto_route: 布线 2 个网络');
+assert(route.totalTrackSegments >= 2, 'auto_route: 生成走线段');
+
+const fix = await pro.drcAutoFix(realBridge);
+assert(fix.after.passed === true, 'drc_autofix: DRC 通过');
 
 mockWs.close();
 console.log('\n==== 结果: ' + pass + ' 通过 / ' + fail + ' 失败 ====');

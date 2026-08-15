@@ -11,6 +11,7 @@ import { registerSchematicTools } from './tools/schematic.js';
 import { registerAgentTools } from './tools/agent.js';
 import { registerCalculatorTools } from './tools/calculators.js';
 import { registerGatewayTools } from './tools/gateway.js';
+import { registerProTools } from './tools/pro.js';
 
 async function main() {
   const bridge = new BridgeClient();
@@ -31,6 +32,7 @@ async function main() {
   registerAgentTools(server, bridge);
   registerCalculatorTools(server);
   registerGatewayTools(server, bridge);
+  registerProTools(server, bridge);
 
   // 首次调用工具时惰性连接官方 Bridge Server（自动发现/拉起）
   process.stderr.write('[jlceda] 官方栈: Run API Gateway + easyeda-api-skill (端口 49620-49629)\n');

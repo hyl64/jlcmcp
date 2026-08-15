@@ -74,7 +74,7 @@ Run API Gateway 扩展已连接（顶部菜单出现 **API Gateway**）。
 | ANTHROPIC_API_KEY | — | Anthropic API Key（设置后启用 pcb_agent 工具） |
 | AGENT_MODEL | claude-sonnet-4-20250514 | Agent 使用的模型 |
 
-## 工具清单（43 个）
+## 工具清单（49 个）
 
 ### 状态查询 (9)
 pcb_get_state / pcb_screenshot / pcb_run_drc / pcb_get_tracks / pcb_get_pads
@@ -114,6 +114,14 @@ pcb_execute_code — 在 EDA 内直接执行任意 eda.* 官方 API 代码（高
 
 > 坐标单位均为 mil。pcb_execute_code 与官方 easyeda-api-skill 用法一致：
 > 代码以 return await eda.dmt_Project.getCurrentProjectInfo(); 形式返回结果。
+
+### 高级功能 (6，v1.1 新增)
+pcb_bom_export — 导出 PCB BOM（JSON + CSV，按元件名聚合数量/位号/网络）
+pcb_net_connectivity_check — 网络连通性检查（标记未布线/单焊盘网络）
+pcb_current_density_report — 各网络载流能力估算（IPC-2221），标记偏低网络
+pcb_fanout_component — 为指定元件所有焊盘创建扇出过孔
+pcb_auto_route_nets — 基础自动布线（L 型两层：顶层水平+底层垂直+过孔，需 DRC 复查）
+pcb_drc_autofix — DRC 自修复（当前支持丝印冲突自动排列），返回修复前后对比
 
 ## 项目结构
 
